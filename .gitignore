@@ -49,3 +49,4 @@ test-csv.js
 test-chunking.js
 interactive-clarification.js
 /test-data
+test-api-simple.js
