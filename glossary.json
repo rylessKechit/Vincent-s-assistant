@@ -1,0 +1,13 @@
+{
+  "terms": {
+    "irpd @ co": "Incremental Revenue Per Day at Check-Out - revenus supplémentaires par jour au moment du check-out",
+    "irpd @ co pp": "Incremental Revenue Per Day at Check-Out Previous Period - revenus supplémentaires par jour période précédente",
+    "up irpd": "Upselling Incremental Revenue Per Day - revenus de vente additionnelle par jour",
+    "incremental revenue @co": "Revenus supplémentaires générés au moment du check-out",
+    "net turnover share": "Part du chiffre d'affaires net de l'agent",
+    "irpd (lc) plan": "Incremental Revenue per Day (Last Call) selon le plan prévisionnel",
+    "δ irpd @ co act/plan [%]": "Écart en pourcentage entre l'IRPD réel et planifié au check-out"
+  },
+  "lastUpdated": "2025-11-07T21:36:15.116Z",
+  "version": 1
+}
