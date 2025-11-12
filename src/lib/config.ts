@@ -60,6 +60,9 @@ export const QUERY_CONFIG = {
   },
 } as const;
 
+// Configuration API Python
+export const PYTHON_API_URL = process.env.PYTHON_API_URL || 'http://localhost:8000';
+
 // Types d'export
 export type FileType = keyof typeof FILE_CONFIG.supportedTypes;
 export type SupportedFileExtension = typeof FILE_CONFIG.supportedTypes[FileType];

@@ -1,5 +1,5 @@
 """
-Service d'extraction CSV avancé avec Pandas
+Service d'extraction CSV avancé avec Pandas - Version Corrigée
 Parsing intelligent et détection automatique des types
 """
 
@@ -25,7 +25,7 @@ class CSVExtractor:
         
         Returns:
             Dict contenant:
-            - dataframe: DataFrame pandas
+            - dataframe_data: Données du DataFrame sous forme de dict
             - metadata: Métadonnées d'extraction
             - column_types: Types détectés par colonne
             - sample_data: Échantillon des données
@@ -75,17 +75,42 @@ class CSVExtractor:
             # 9. Échantillon pour preview
             sample_data = self._generate_sample(df)
             
+            # 10. Convertir le DataFrame en format sérialisable
+            dataframe_data = self._serialize_dataframe(df)
+            
             return {
-                "dataframe": df,
+                "success": True,
+                "dataframe_data": dataframe_data,  # ✅ Sérialisable
                 "metadata": metadata,
                 "column_types": column_types,
-                "sample_data": sample_data,
-                "success": True
+                "sample_data": sample_data
             }
             
         except Exception as e:
             logger.error(f"Erreur extraction CSV: {str(e)}")
             raise Exception(f"Impossible d'extraire le CSV: {str(e)}")
+    
+    def _serialize_dataframe(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Convertit le DataFrame en format sérialisable JSON"""
+        try:
+            # Remplacer NaN par None pour JSON
+            df_clean = df.replace({np.nan: None})
+            
+            return {
+                "columns": list(df.columns),
+                "data": df_clean.to_dict('records'),  # Liste de dict pour chaque ligne
+                "shape": {"rows": len(df), "columns": len(df.columns)},
+                "dtypes": df.dtypes.astype(str).to_dict()
+            }
+        except Exception as e:
+            logger.error(f"Erreur sérialisation DataFrame: {str(e)}")
+            return {
+                "columns": [],
+                "data": [],
+                "shape": {"rows": 0, "columns": 0},
+                "dtypes": {},
+                "error": str(e)
+            }
     
     def _detect_separator(self, csv_string: str) -> str:
         """Détection automatique du séparateur CSV"""
@@ -284,19 +309,22 @@ class CSVExtractor:
             "encoding": encoding,
             "separator": separator,
             "shape": {
-                "rows": len(df),
-                "columns": len(df.columns)
+                "rows": int(len(df)),  # Convertir en int natif Python
+                "columns": int(len(df.columns))
             },
-            "memory_usage": df.memory_usage(deep=True).sum(),
+            "memory_usage": int(df.memory_usage(deep=True).sum()),
             "columns": list(df.columns),
-            "null_counts": df.isnull().sum().to_dict(),
-            "data_types": df.dtypes.astype(str).to_dict()
+            "null_counts": {k: int(v) for k, v in df.isnull().sum().to_dict().items()},
+            "data_types": {k: str(v) for k, v in df.dtypes.to_dict().items()}
         }
     
     def _generate_sample(self, df: pd.DataFrame, n_rows: int = 5) -> Dict[str, Any]:
         """Génère un échantillon des données"""
+        # Remplacer NaN par None pour JSON
+        df_clean = df.replace({np.nan: None})
+        
         return {
-            "head": df.head(n_rows).to_dict('records'),
-            "tail": df.tail(n_rows).to_dict('records'),
-            "random_sample": df.sample(min(n_rows, len(df))).to_dict('records') if len(df) > 0 else []
+            "head": df_clean.head(n_rows).to_dict('records'),
+            "tail": df_clean.tail(n_rows).to_dict('records'),
+            "random_sample": df_clean.sample(min(n_rows, len(df))).to_dict('records') if len(df) > 0 else []
         }

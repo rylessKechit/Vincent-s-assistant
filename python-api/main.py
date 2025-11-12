@@ -1,282 +1,302 @@
 """
-API Python FastAPI pour AI-Assistant
-Extraction, analyse et compréhension avancée des données
+API Python pour l'analyse de données intelligente
+Version corrigée pour éliminer les problèmes de sérialisation
 """
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Depends
+import os
+import sys
+import time
+from typing import Dict, Any, List, Union
+from contextlib import asynccontextmanager
+
+# Configuration des logs en premier
+from loguru import logger
+logger.remove()
+log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+logger.add(sys.stdout, level=log_level)
+
+# Imports FastAPI
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-import os
-from typing import Optional, List, Dict, Any
-import pandas as pd
-import numpy as np
-from loguru import logger
-import sys
-from dotenv import load_dotenv
 
-# Charger les variables d'environnement
-load_dotenv()
-
-# Configuration des logs
-logger.remove()
-logger.add(sys.stdout, level=os.getenv("LOG_LEVEL", "INFO"))
-
-# Import des services locaux
+# Imports des services
 from services.extractor import CSVExtractor
 from services.analyzer import DataAnalyzer
 from services.classifier import QueryClassifier
-from utils.data_quality import DataQualityAssessor
+from services.quality import QualityChecker
 
-# Configuration de l'application
-app = FastAPI(
-    title="AI-Assistant Data API",
-    description="API Python spécialisée pour l'extraction et l'analyse de données",
-    version="1.0.0"
-)
+# Models Pydantic pour validation
+class QueryRequest(BaseModel):
+    question: str
+    available_columns: List[str]
+    context: Dict[str, Any] = {}
 
-# Configuration CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+class AggregationRequest(BaseModel):
+    question: str
+    dataframe_data: Dict[str, Any]
+    aggregation_type: str = "smart"
 
-# Modèles Pydantic
-class AnalysisResponse(BaseModel):
+class ExtractionResponse(BaseModel):
     success: bool
     data: Dict[str, Any]
     processing_time_ms: float
-    error: Optional[str] = None
+    error: str = None
 
-class QueryClassificationRequest(BaseModel):
-    question: str
-    available_columns: List[str]
-    context: Optional[Dict[str, Any]] = None
-
-class QueryClassificationResponse(BaseModel):
-    type: str  # "numeric", "semantic", "hybrid"
+class ClassificationResponse(BaseModel):
+    type: str
     confidence: float
     relevant_columns: List[str]
     suggested_strategy: str
     processing_time_ms: float
 
-# Instances des services (initialisées au démarrage)
+class AggregationResponse(BaseModel):
+    success: bool
+    aggregations: Dict[str, Any]
+    processing_time_ms: float
+    error: str = None
+
+# Initialisation des services
 extractor = CSVExtractor()
 analyzer = DataAnalyzer()
 classifier = QueryClassifier()
-quality_assessor = DataQualityAssessor()
+quality_checker = QualityChecker()
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialisation des services au démarrage"""
+# Lifecycle management
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     logger.info("🚀 Démarrage de l'API Python...")
     
-    # Charger les modèles ML pré-entraînés
+    # Initialisation des services
     await classifier.load_models()
     
-    logger.info("✅ API Python prête !")
+    logger.success("✅ API Python prête !")
+    yield
+    logger.info("🛑 Arrêt de l'API Python")
 
-@app.get("/")
-async def root():
-    """Point d'entrée de l'API"""
-    return {
-        "message": "🐍 API Python AI-Assistant",
-        "version": "1.0.0",
-        "status": "operational",
-        "services": ["extraction", "analysis", "classification"]
-    }
+# Application FastAPI
+app = FastAPI(
+    title="AI-Assistant Python API",
+    description="API d'analyse de données intelligente avec ML",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# Configuration CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # En production, spécifier les domaines autorisés
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 async def health_check():
-    """Vérification de santé de l'API"""
+    """Vérification de la santé de l'API"""
     return {
         "status": "healthy",
-        "python_version": sys.version,
-        "pandas_version": pd.__version__,
-        "numpy_version": np.__version__,
-        "services_ready": {
+        "timestamp": time.time(),
+        "services": {
             "extractor": extractor.is_ready(),
-            "analyzer": analyzer.is_ready(), 
-            "classifier": classifier.is_ready()
+            "analyzer": analyzer.is_ready(),
+            "classifier": classifier.is_ready(),
+            "quality_checker": quality_checker.is_ready()
         }
     }
 
-@app.post("/extract", response_model=AnalysisResponse)
-async def extract_and_analyze_file(
-    file: UploadFile = File(..., description="Fichier à analyser (CSV priorité)")
-):
+@app.post("/extract", response_model=ExtractionResponse)
+async def extract_and_analyze(file: UploadFile = File(...)):
     """
-    Extraction et analyse avancée d'un fichier
-    
-    Processus:
-    1. Parsing intelligent avec Pandas
-    2. Détection automatique des types de colonnes
-    3. Analyse de qualité des données
-    4. Calcul d'agrégations avancées
-    5. Détection de patterns métier
+    Extraction et analyse complète d'un fichier CSV
     """
-    import time
     start_time = time.time()
     
     try:
-        logger.info(f"📁 Analyse du fichier: {file.filename}")
-        
-        # Validation de base
+        # Validation du fichier
         if not file.filename.lower().endswith('.csv'):
-            raise HTTPException(
-                status_code=400, 
-                detail="Seuls les fichiers CSV sont supportés actuellement"
-            )
+            raise HTTPException(status_code=400, detail="Seuls les fichiers CSV sont supportés")
         
-        if file.size > int(os.getenv("MAX_FILE_SIZE", 52428800)):
-            raise HTTPException(
-                status_code=413,
-                detail="Fichier trop volumineux (max 50MB)"
-            )
+        if file.size and file.size > 50 * 1024 * 1024:  # 50MB
+            raise HTTPException(status_code=400, detail="Fichier trop volumineux (max 50MB)")
         
-        # Lire le contenu du fichier
+        # Lecture du contenu
         content = await file.read()
+        logger.info(f"Fichier reçu: {file.filename} ({len(content)} bytes)")
         
-        # 1. Extraction avec Pandas
-        logger.info("🔄 Extraction avec Pandas...")
+        # 1. Extraction CSV
+        logger.info("📊 Début extraction CSV...")
         extraction_result = await extractor.extract_csv(content, file.filename)
         
-        # 2. Analyse avancée
-        logger.info("🔄 Analyse statistique...")
-        analysis_result = await analyzer.analyze_dataframe(
-            extraction_result["dataframe"],
-            extraction_result["metadata"]
-        )
+        if not extraction_result.get('success', False):
+            error_msg = "Erreur lors de l'extraction CSV"
+            logger.error(error_msg)
+            raise HTTPException(status_code=400, detail=error_msg)
         
-        # 3. Évaluation qualité
-        logger.info("🔄 Évaluation qualité...")
-        quality_score = await quality_assessor.assess_quality(
-            extraction_result["dataframe"]
-        )
+        # Vérifier que dataframe_data existe
+        if 'dataframe_data' not in extraction_result:
+            error_msg = "Données DataFrame manquantes dans l'extraction"
+            logger.error(error_msg)
+            raise HTTPException(status_code=500, detail=error_msg)
         
-        # 4. Détection patterns métier (spécialisé SIXT)
-        logger.info("🔄 Détection patterns métier...")
-        business_patterns = await analyzer.detect_business_patterns(
-            extraction_result["dataframe"]
-        )
+        dataframe_data = extraction_result['dataframe_data']
+        metadata = extraction_result.get('metadata', {})
+        
+        # 2. Analyse des données (utiliser dataframe_data au lieu du DataFrame brut)
+        logger.info("🧠 Début analyse des données...")
+        analysis_result = await analyzer.analyze_dataframe(dataframe_data, metadata)
+        
+        # 3. Détection des patterns métier
+        logger.info("🎯 Détection patterns métier...")
+        business_patterns = await analyzer.detect_business_patterns(dataframe_data)
+        
+        # 4. Vérification de la qualité
+        logger.info("✅ Vérification qualité...")
+        quality_result = await quality_checker.check_quality(dataframe_data, metadata)
+        
+        # 5. Génération des recommandations
+        logger.info("💡 Génération recommandations...")
+        recommendations = await analyzer.generate_recommendations(dataframe_data, business_patterns)
         
         processing_time = (time.time() - start_time) * 1000
         
+        # Construire la réponse finale (tout en format JSON-safe)
         response_data = {
             "extraction": extraction_result,
             "analysis": analysis_result,
-            "quality": quality_score,
+            "quality": quality_result,
             "business_patterns": business_patterns,
-            "recommendations": await analyzer.generate_recommendations(
-                extraction_result["dataframe"], business_patterns
-            )
+            "recommendations": recommendations
         }
         
         logger.success(f"✅ Analyse terminée en {processing_time:.0f}ms")
         
-        return AnalysisResponse(
+        return ExtractionResponse(
             success=True,
             data=response_data,
             processing_time_ms=processing_time
         )
         
+    except HTTPException:
+        raise
     except Exception as e:
         processing_time = (time.time() - start_time) * 1000
-        logger.error(f"❌ Erreur analyse: {str(e)}")
+        error_msg = f"Erreur lors du traitement: {str(e)}"
+        logger.error(error_msg)
         
-        return AnalysisResponse(
+        return ExtractionResponse(
             success=False,
             data={},
             processing_time_ms=processing_time,
-            error=str(e)
+            error=error_msg
         )
 
-@app.post("/classify", response_model=QueryClassificationResponse)
-async def classify_query(request: QueryClassificationRequest):
+@app.post("/classify", response_model=ClassificationResponse)
+async def classify_question(request: QueryRequest):
     """
-    Classification intelligente des questions avec ML
-    
-    Détermine:
-    - Type: numeric, semantic, hybrid
-    - Colonnes pertinentes
-    - Stratégie de réponse optimale
+    Classification intelligente d'une question
     """
-    import time
     start_time = time.time()
     
     try:
-        logger.info(f"🧠 Classification: {request.question[:50]}...")
-        
-        classification_result = await classifier.classify_question(
-            question=request.question,
-            available_columns=request.available_columns,
-            context=request.context or {}
+        result = await classifier.classify_question(
+            request.question,
+            request.available_columns,
+            request.context
         )
         
         processing_time = (time.time() - start_time) * 1000
         
-        return QueryClassificationResponse(
-            **classification_result,
+        return ClassificationResponse(
+            type=result['type'],
+            confidence=result['confidence'],
+            relevant_columns=result['relevant_columns'],
+            suggested_strategy=result['suggested_strategy'],
             processing_time_ms=processing_time
         )
         
     except Exception as e:
         processing_time = (time.time() - start_time) * 1000
-        logger.error(f"❌ Erreur classification: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Erreur classification: {str(e)}")
+        
+        # Fallback classification
+        return ClassificationResponse(
+            type="semantic",
+            confidence=0.5,
+            relevant_columns=[],
+            suggested_strategy="Classification par défaut (erreur)",
+            processing_time_ms=processing_time
+        )
 
-@app.post("/aggregate")
-async def compute_advanced_aggregations(
-    question: str,
-    dataframe_data: Dict[str, Any],
-    aggregation_type: str = "smart"
-):
+@app.post("/aggregate", response_model=AggregationResponse)
+async def compute_aggregations(request: AggregationRequest):
     """
-    Calculs d'agrégations avancées basées sur la question
-    
-    Types:
-    - smart: Détection automatique des agrégations pertinentes
-    - statistical: Analyses statistiques poussées
-    - business: Métriques métier spécialisées
+    Calcul d'agrégations intelligentes
     """
-    import time
     start_time = time.time()
     
     try:
-        logger.info(f"📊 Agrégations {aggregation_type} pour: {question[:50]}...")
-        
-        # Reconstituer le DataFrame depuis les données
-        df = pd.DataFrame(dataframe_data)
-        
-        # Calculs d'agrégations intelligentes
         aggregations = await analyzer.compute_smart_aggregations(
-            dataframe=df,
-            question=question,
-            aggregation_type=aggregation_type
+            request.dataframe_data,
+            request.question,
+            request.aggregation_type
         )
         
         processing_time = (time.time() - start_time) * 1000
         
-        return {
-            "success": True,
-            "aggregations": aggregations,
-            "processing_time_ms": processing_time
-        }
+        return AggregationResponse(
+            success=True,
+            aggregations=aggregations,
+            processing_time_ms=processing_time
+        )
         
     except Exception as e:
         processing_time = (time.time() - start_time) * 1000
-        logger.error(f"❌ Erreur agrégations: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        error_msg = f"Erreur agrégations: {str(e)}"
+        logger.error(error_msg)
+        
+        return AggregationResponse(
+            success=False,
+            aggregations={},
+            processing_time_ms=processing_time,
+            error=error_msg
+        )
+
+@app.get("/status")
+async def get_status():
+    """Statut détaillé de l'API"""
+    return {
+        "status": "running",
+        "version": "1.0.0",
+        "uptime": time.time(),
+        "endpoints": {
+            "/health": "Vérification santé",
+            "/extract": "Extraction et analyse CSV",
+            "/classify": "Classification de questions",
+            "/aggregate": "Calculs d'agrégations"
+        }
+    }
+
+# Gestion des erreurs globales
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"Erreur non gérée: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "error": "Erreur interne du serveur",
+            "detail": str(exc)
+        }
+    )
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
-        host=os.getenv("API_HOST", "0.0.0.0"),
-        port=int(os.getenv("API_PORT", 8000)),
-        reload=os.getenv("DEBUG", "false").lower() == "true",
-        log_level=os.getenv("LOG_LEVEL", "info").lower()
+        host="0.0.0.0",
+        port=8000,
+        reload=True,
+        log_level="info"
     )
