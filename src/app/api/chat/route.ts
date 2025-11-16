@@ -1,169 +1,199 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { ObjectId } from 'mongodb';
-import { DatabaseFactory, MongoDBClient } from '@/lib/mongodb';
+import { MongoDBClient, DatabaseFactory } from '@/lib/mongodb';
 import { pythonClient } from '@/lib/python-client';
-import { synthesizeAnswer, createEmbedding } from '@/lib/openai';
-import { QUERY_CONFIG } from '@/lib/config';
-import type { QueryType } from '@/types/database';
+import { openai, detectQueryType, createEmbedding } from '@/lib/openai';
 
-// Configuration pour Next.js
 export const dynamic = 'force-dynamic';
-export const runtime = 'nodejs';
 
-interface ChatRequest {
-  question: string;
-  documentIds?: string[];
-}
+// ✅ Configuration locale compatible si QUERY_CONFIG n'existe pas
+const LOCAL_QUERY_CONFIG = {
+  maxResults: 10,
+  similarityThreshold: 0.7,
+};
 
-interface ChatResponse {
-  success: boolean;
-  answer?: string;
-  confidence?: number;
-  queryType?: QueryType;
-  sources?: Array<{
-    documentId: string;
-    filename: string;
-    snippet: string;
-    relevanceScore: number;
-  }>;
-  processingTimeMs?: number;
-  tokensUsed?: number;
-  pythonInsights?: any; // ✅ Nouveaux insights Python
-  error?: string;
-}
-
-export async function POST(request: NextRequest): Promise<NextResponse<ChatResponse>> {
+export async function POST(request: NextRequest) {
   const startTime = Date.now();
   let totalTokensUsed = 0;
 
   try {
-    // Parser la requête
-    const body: ChatRequest = await request.json();
+    const body = await request.json();
     const { question, documentIds } = body;
 
-    if (!question || question.trim().length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: 'Question manquante ou vide'
-      }, { status: 400 });
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      return NextResponse.json(
+        { error: 'Question requise' },
+        { status: 400 }
+      );
     }
 
-    // Assurer la connexion MongoDB
+    // ✅ Connexion à la base de données - UTILISE votre système existant
     const client = MongoDBClient.getInstance();
     await client.connect();
     const { documents } = await DatabaseFactory.getRepositories();
 
-    // 🐍 ÉTAPE 1 : Classification Intelligente avec Python
-    console.log('🧠 Classification Python de la question...');
-    
-    // Récupérer les documents et leurs colonnes
-    const availableDocs = await documents.findByStatus('completed');
-    const availableColumns = extractColumnsFromDocuments(availableDocs);
-    
-    const classificationResult = await pythonClient.classifyQuery(
-      question,
-      availableColumns,
-      { documentCount: availableDocs.length }
-    );
-    
-    console.log(`📋 Type détecté: ${classificationResult.type} (confiance: ${classificationResult.confidence})`);
-
-    let contextData: Array<{ text: string; source: string; score: number }> = [];
-    let searchedDocuments: any[] = [];
-    let pythonInsights: any = null;
-
-    // 🔍 ÉTAPE 2 : Recherche Selon le Type Détecté
-    if (classificationResult.type === 'numeric' || classificationResult.type === 'hybrid') {
-      // 🐍 Utiliser l'API Python pour les agrégations intelligentes
-      console.log('📊 Recherche Python pour question numérique...');
-      
-      for (const doc of availableDocs) {
-        if (doc.pythonAnalysis) {
-          try {
-            const aggregationResult = await pythonClient.computeAggregations(
-              question,
-              doc.pythonAnalysis.extraction.dataframe_data,
-              'smart'
-            );
-            
-            if (aggregationResult.success) {
-              pythonInsights = aggregationResult.aggregations;
-              
-              // Construire le contexte à partir des agrégations Python
-              const aggContext = buildPythonAggregationContext(doc, question, aggregationResult.aggregations);
-              contextData.push({
-                text: aggContext,
-                source: doc.filename,
-                score: 1.0
-              });
-              
-              searchedDocuments.push(doc);
-            }
-          } catch (error) {
-            console.error(`Erreur agrégation Python pour ${doc.filename}:`, error);
-          }
-        } else {
-          // Fallback sur les agrégations MongoDB classiques
-          const aggContext = buildClassicAggregationContext(doc, question);
-          if (aggContext) {
-            contextData.push({
-              text: aggContext,
-              source: doc.filename,
-              score: 0.8
-            });
-            searchedDocuments.push(doc);
-          }
-        }
-      }
-    }
-
-    if (classificationResult.type === 'semantic' || classificationResult.type === 'hybrid') {
-      // 🔮 Recherche vectorielle classique
-      console.log('🔮 Recherche vectorielle...');
-      
-      const embeddingResult = await createEmbedding(question);
-      totalTokensUsed += embeddingResult.tokensUsed;
-
-      const vectorResults = await documents.vectorSearch(
-        embeddingResult.embedding,
-        QUERY_CONFIG.maxResults,
-        documentIds?.map(id => new ObjectId(id))
+    // Récupérer les documents pertinents
+    let relevantDocuments;
+    if (documentIds && documentIds.length > 0) {
+      // Documents spécifiques demandés
+      relevantDocuments = await Promise.all(
+        documentIds.map((id: string) => documents.findById(id))
       );
-
-      for (const result of vectorResults) {
-        if (result.score >= QUERY_CONFIG.similarityThreshold) {
-          contextData.push({
-            text: result.chunk.text,
-            source: result.document.filename,
-            score: result.score
-          });
-          
-          if (!searchedDocuments.find(doc => doc._id.equals(result.document._id))) {
-            searchedDocuments.push(result.document);
-          }
-        }
+      relevantDocuments = relevantDocuments.filter(doc => doc !== null);
+    } else {
+      // ✅ Utilise la méthode compatible du nouveau repository
+      relevantDocuments = await documents.findDocumentsWithPythonAnalysis();
+      
+      if (relevantDocuments.length === 0) {
+        relevantDocuments = await documents.findDocumentsWithAggregations();
       }
     }
 
-    if (contextData.length === 0) {
+    if (relevantDocuments.length === 0) {
       return NextResponse.json({
         success: false,
-        error: 'Aucune donnée pertinente trouvée pour cette question'
+        error: 'Aucun document trouvé ou analysé. Veuillez d\'abord uploader des documents.'
       }, { status: 404 });
     }
 
-    // 🤖 ÉTAPE 3 : Synthèse avec OpenAI
-    console.log('🤖 Synthèse de la réponse...');
-    const synthesisResult = await synthesizeAnswer(question, contextData, classificationResult.type);
-    totalTokensUsed += synthesisResult.tokensUsed;
+    // ✅ Classification de la question - UTILISE votre fonction OpenAI existante
+    const availableColumns = extractColumnsFromDocuments(relevantDocuments);
+    const classificationResult = await detectQueryType(question);
 
-    // 📋 ÉTAPE 4 : Construire la réponse finale
-    const sources = contextData.map((context, index) => ({
-      documentId: searchedDocuments[0]?._id?.toString() || 'unknown',
-      filename: context.source,
-      snippet: context.text.substring(0, 200) + (context.text.length > 200 ? '...' : ''),
-      relevanceScore: context.score
-    }));
+    let synthesisResult;
+    let sources: any[] = [];
+    let pythonInsights: any = null;
+
+    // Traitement selon le type de question détecté
+    if (classificationResult.type === 'numeric' || classificationResult.type === 'hybrid') {
+      // 🐍 PRIORISER L'ANALYSE PYTHON pour les questions numériques
+      const pythonDocument = relevantDocuments.find(doc => !!doc.pythonAnalysis);
+      
+      if (pythonDocument && pythonDocument.pythonAnalysis) {
+        try {
+          // Utiliser l'API Python pour les calculs avancés
+          const pythonAggregations = await pythonClient.computeAggregations(
+            question,
+            pythonDocument.pythonAnalysis.extraction,
+            'smart'
+          );
+
+          if (pythonAggregations.success) {
+            // Construire le contexte avec les résultats Python
+            const pythonContext = buildPythonAggregationContext(
+              pythonDocument, 
+              question, 
+              pythonAggregations.aggregations
+            );
+
+            // ✅ Synthèse avec OpenAI utilisant votre client existant
+            synthesisResult = await synthesizeAnswerWithOpenAI(
+              question,
+              pythonContext,
+              classificationResult.type
+            );
+            
+            totalTokensUsed += synthesisResult.tokensUsed || 0;
+            
+            sources.push({
+              documentId: pythonDocument._id.toString(),
+              filename: pythonDocument.filename,
+              type: 'python_aggregation',
+              relevanceScore: 0.95,
+              snippet: `Calculs Python: ${Object.keys(pythonAggregations.aggregations).join(', ')}`
+            });
+
+            pythonInsights = {
+              aggregations: pythonAggregations.aggregations,
+              processing_time: pythonAggregations.processing_time_ms,
+              quality_score: pythonDocument.pythonAnalysis.quality?.overall_score,
+              business_patterns: pythonDocument.pythonAnalysis.analysis?.business_patterns
+            };
+
+          } else {
+            throw new Error('Échec calculs Python, fallback vers MongoDB');
+          }
+        } catch (error) {
+          console.warn('Erreur Python, fallback vers MongoDB:', error);
+          
+          // ✅ Fallback vers les agrégations MongoDB classiques
+          const classicContext = buildClassicAggregationContext(pythonDocument, question);
+          if (classicContext) {
+            synthesisResult = await synthesizeAnswerWithOpenAI(
+              question,
+              classicContext,
+              classificationResult.type
+            );
+            totalTokensUsed += synthesisResult.tokensUsed || 0;
+          }
+        }
+      } else {
+        // ✅ Pas d'analyse Python, utiliser MongoDB classique
+        const documentsWithAggregations = relevantDocuments.filter(doc => doc.aggregations);
+        
+        if (documentsWithAggregations.length > 0) {
+          const aggregationContext = documentsWithAggregations.map(doc => 
+            buildClassicAggregationContext(doc, question)
+          ).filter(Boolean).join('\n\n');
+
+          synthesisResult = await synthesizeAnswerWithOpenAI(
+            question,
+            aggregationContext,
+            classificationResult.type
+          );
+          totalTokensUsed += synthesisResult.tokensUsed || 0;
+
+          sources = documentsWithAggregations.map(doc => ({
+            documentId: doc._id.toString(),
+            filename: doc.filename,
+            type: 'mongodb_aggregation',
+            relevanceScore: 0.8,
+            snippet: `${doc.aggregations?.totalRows} lignes, ${doc.aggregations?.columns.length} colonnes`
+          }));
+        }
+      }
+    } else {
+      // ✅ Questions sémantiques : utiliser la recherche vectorielle
+      const embeddingResult = await createEmbedding(question);
+      totalTokensUsed += embeddingResult.tokensUsed;
+
+      const documentObjectIds = relevantDocuments.map(doc => doc._id);
+      const searchResults = await documents.vectorSearch(
+        embeddingResult.embedding,
+        LOCAL_QUERY_CONFIG.maxResults,
+        documentObjectIds
+      );
+
+      if (searchResults.length > 0) {
+        const context = searchResults.map(result => ({
+          text: result.chunk?.text || '',
+          filename: result.document.filename,
+          score: result.score
+        }));
+
+        synthesisResult = await synthesizeAnswerWithOpenAI(
+          question,
+          context.map(c => `${c.filename}: ${c.text}`).join('\n\n'),
+          'semantic'
+        );
+        totalTokensUsed += synthesisResult.tokensUsed || 0;
+
+        sources = context.map((ctx, idx) => ({
+          documentId: searchResults[idx].document._id.toString(),
+          filename: ctx.filename,
+          type: 'vector_search',
+          relevanceScore: ctx.score,
+          snippet: ctx.text.substring(0, 200) + (ctx.text.length > 200 ? '...' : ''),
+        }));
+      }
+    }
+
+    // Vérifier qu'on a une réponse
+    if (!synthesisResult) {
+      return NextResponse.json({
+        success: false,
+        error: 'Impossible de générer une réponse avec les documents disponibles'
+      }, { status: 500 });
+    }
 
     const processingTime = Date.now() - startTime;
 
@@ -176,6 +206,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
       processingTimeMs: processingTime,
       tokensUsed: totalTokensUsed,
       pythonInsights, // ✅ Inclure les insights Python
+      metadata: {
+        documentsSearched: relevantDocuments.length,
+        pythonDocuments: relevantDocuments.filter(doc => !!doc.pythonAnalysis).length,
+        classicDocuments: relevantDocuments.filter(doc => !!doc.aggregations).length,
+        availableColumns: availableColumns.length,
+        classification: classificationResult
+      }
     });
 
   } catch (error: any) {
@@ -193,12 +230,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ChatRespo
 }
 
 /**
- * Extrait les colonnes disponibles depuis les documents
+ * ✅ Extrait les colonnes disponibles depuis les documents - COMPATIBLE
  */
 function extractColumnsFromDocuments(documents: any[]): string[] {
   const allColumns = new Set<string>();
   
   documents.forEach(doc => {
+    // Prioriser les colonnes Python
     if (doc.pythonAnalysis?.extraction?.metadata?.columns) {
       doc.pythonAnalysis.extraction.metadata.columns.forEach((col: string) => {
         allColumns.add(col);
@@ -214,7 +252,7 @@ function extractColumnsFromDocuments(documents: any[]): string[] {
 }
 
 /**
- * Construit le contexte d'agrégation avec les données Python
+ * ✅ Construit le contexte d'agrégation avec les données Python
  */
 function buildPythonAggregationContext(document: any, question: string, pythonAggregations: any): string {
   const contextParts: string[] = [];
@@ -254,27 +292,11 @@ function buildPythonAggregationContext(document: any, question: string, pythonAg
     }
   }
   
-  if (pythonAggregations.by_agent) {
-    const questionLower = question.toLowerCase();
-    // Rechercher un agent spécifique dans la question
-    const mentionedAgent = Object.keys(pythonAggregations.by_agent).find(agent => 
-      questionLower.includes(agent.toLowerCase().split(' - ')[1]?.toLowerCase() || '')
-    );
-    
-    if (mentionedAgent) {
-      contextParts.push(`\nDonnées pour ${mentionedAgent}:`);
-      const agentData = pythonAggregations.by_agent[mentionedAgent];
-      Object.entries(agentData).forEach(([metric, value]: [string, any]) => {
-        contextParts.push(`- ${metric}: ${typeof value === 'number' ? value.toLocaleString() : value}`);
-      });
-    }
-  }
-  
   return contextParts.join('\n');
 }
 
 /**
- * Fallback : contexte d'agrégation classique MongoDB
+ * ✅ Fallback : contexte d'agrégation classique MongoDB
  */
 function buildClassicAggregationContext(document: any, question: string): string | null {
   if (!document.aggregations) return null;
@@ -300,7 +322,42 @@ function buildClassicAggregationContext(document: any, question: string): string
   return contextParts.join('\n');
 }
 
-// Endpoint GET pour obtenir la liste des documents disponibles
+/**
+ * ✅ Synthèse de réponse avec OpenAI - UTILISE votre client existant
+ */
+async function synthesizeAnswerWithOpenAI(
+  question: string, 
+  context: string, 
+  queryType: string
+): Promise<{ answer: string; confidence: number; tokensUsed: number }> {
+  
+  const systemPrompt = queryType === 'numeric' 
+    ? "Tu es un assistant d'analyse de données. Réponds précisément aux questions numériques avec les calculs fournis. Utilise les données exactes du contexte."
+    : "Tu es un assistant d'analyse de données. Réponds aux questions en utilisant le contexte fourni. Sois précis et informatif.";
+
+  // ✅ UTILISE votre client OpenAI existant
+  const completionResult = await openai.createChatCompletion([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: `Question: ${question}\n\nContexte des données:\n${context}\n\nRéponds de manière claire et structurée.` }
+  ], {
+    temperature: 0.1,
+    maxTokens: 500
+  });
+
+  const answer = completionResult.content || 'Réponse non disponible';
+  const tokensUsed = completionResult.tokensUsed || 0;
+  
+  // Estimation simple de la confiance
+  const confidence = answer.length > 50 && !answer.includes('je ne sais pas') ? 0.9 : 0.6;
+
+  return {
+    answer,
+    confidence,
+    tokensUsed
+  };
+}
+
+// ✅ Endpoint GET pour obtenir la liste des documents - COMPATIBLE
 export async function GET(request: NextRequest) {
   try {
     const client = MongoDBClient.getInstance();
@@ -318,7 +375,7 @@ export async function GET(request: NextRequest) {
       summary: doc.summary,
       rowCount: doc.pythonAnalysis?.extraction?.metadata?.shape?.rows || doc.aggregations?.totalRows || 0,
       chunksCount: doc.processing?.chunksCount || 0,
-      hasPythonAnalysis: !!doc.pythonAnalysis, // ✅ Nouveau flag
+      hasPythonAnalysis: !!doc.pythonAnalysis, // ✅ Propriété compatible
     }));
 
     return NextResponse.json({

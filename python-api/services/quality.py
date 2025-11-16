@@ -48,7 +48,8 @@ class QualityChecker:
         try:
             df = self._get_dataframe(df_input)
             
-            if df.empty:
+            if df.empty or df.shape[0] == 0 or df.shape[1] == 0:
+                logger.warning("DataFrame vide détecté dans quality check")
                 return self._get_empty_quality_report()
             
             quality_report = {
@@ -108,16 +109,37 @@ class QualityChecker:
         }
     
     def _check_completeness(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Vérification de la complétude des données"""
+        """Vérification de la complétude des données - VERSION CORRIGÉE"""
+        
+        # ✅ CORRECTION : Vérification early return pour DataFrame vide
+        if df.empty or df.shape[0] == 0 or df.shape[1] == 0:
+            return {
+                'score': 0.0,
+                'missing_cells': 0,
+                'total_cells': 0,
+                'column_completeness': {},
+                'issues': ['Dataset vide ou sans colonnes']
+            }
+        
         total_cells = df.shape[0] * df.shape[1]
         missing_cells = df.isnull().sum().sum()
-        completeness_ratio = (total_cells - missing_cells) / total_cells if total_cells > 0 else 0
+        
+        # ✅ CORRECTION : Double protection contre division par zéro
+        if total_cells == 0:
+            completeness_ratio = 0.0
+        else:
+            completeness_ratio = (total_cells - missing_cells) / total_cells
         
         issues = []
         column_completeness = {}
         
         for col in df.columns:
-            col_completeness = 1 - (df[col].isnull().sum() / len(df))
+            col_count = len(df)
+            if col_count == 0:  # ✅ Protection supplémentaire
+                col_completeness = 0.0
+            else:
+                col_completeness = 1 - (df[col].isnull().sum() / col_count)
+            
             column_completeness[col] = float(col_completeness)
             
             if col_completeness < 0.8:

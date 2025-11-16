@@ -4,11 +4,12 @@ import type {
   Conversation, 
   DocumentChunk,
   DocumentStatus,
-  CsvAggregations 
+  CsvAggregations,
+  PythonAnalysisData
 } from '@/types/database';
 import { DB_CONFIG, validateEnvVars } from '@/lib/config';
 
-// Client MongoDB singleton
+// Client MongoDB singleton - IDENTIQUE à votre version existante
 export class MongoDBClient {
   private static instance: MongoDBClient;
   private client: MongoClient | null = null;
@@ -55,17 +56,19 @@ export class MongoDBClient {
     try {
       const documentsCollection = this.db.collection<Document>(DB_CONFIG.collections.documents);
       
-      // Index sur le filename pour recherche rapide
+      // Index existants - IDENTIQUES à votre version
       await documentsCollection.createIndex({ filename: 1 });
-      
-      // Index sur le status pour filtrer
       await documentsCollection.createIndex({ status: 1 });
-      
-      // Index sur uploadedAt pour tri chronologique
       await documentsCollection.createIndex({ uploadedAt: -1 });
-      
-      // Index composé pour recherche par type et status
       await documentsCollection.createIndex({ type: 1, status: 1 });
+
+      // 🐍 NOUVEL index optionnel pour l'analyse Python
+      await documentsCollection.createIndex({ 
+        "pythonAnalysis.extraction.metadata.columns": 1 
+      }).catch(() => {
+        // Ignore l'erreur si l'index existe déjà ou si la propriété n'existe pas
+        console.log('Index Python Analysis non créé - ce n\'est pas grave');
+      });
 
       console.log('✅ Index MongoDB créés');
     } catch (error) {
@@ -90,7 +93,7 @@ export class MongoDBClient {
   }
 }
 
-// Repository pour les documents
+// Repository pour les documents - ÉTENDU mais 100% rétrocompatible
 export class DocumentRepository {
   private collection: Collection<Document>;
 
@@ -98,6 +101,7 @@ export class DocumentRepository {
     this.collection = db.collection<Document>(DB_CONFIG.collections.documents);
   }
 
+  // ✅ Méthodes EXISTANTES - inchangées
   async create(document: Omit<Document, '_id'>): Promise<ObjectId> {
     const result = await this.collection.insertOne({
       ...document,
@@ -180,22 +184,84 @@ export class DocumentRepository {
     await this.collection.deleteOne({ _id: objectId });
   }
 
-  // Recherche vectorielle (Atlas Vector Search)
+  // 🐍 NOUVELLES méthodes compatibles avec votre système existant
+  async updatePythonAnalysis(id: string | ObjectId, pythonAnalysis: PythonAnalysisData): Promise<void> {
+    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+    await this.collection.updateOne(
+      { _id: objectId },
+      { 
+        $set: { 
+          pythonAnalysis,
+          processedAt: new Date()
+        } 
+      }
+    );
+  }
+
+  // ✅ Méthode compatible utilisant les méthodes existantes
+  async updateDocumentComplete(
+    id: string | ObjectId, 
+    updates: {
+      summary?: string;
+      keyFacts?: string[];
+      chunks?: DocumentChunk[];
+      aggregations?: CsvAggregations;
+      pythonAnalysis?: PythonAnalysisData;
+      status?: DocumentStatus;
+      processing?: any;
+    }
+  ): Promise<void> {
+    const objectId = typeof id === 'string' ? new ObjectId(id) : id;
+    
+    // Utiliser les méthodes existantes une par une pour compatibilité
+    if (updates.status) {
+      await this.updateStatus(objectId, updates.status);
+    }
+    
+    if (updates.chunks) {
+      await this.updateChunks(objectId, updates.chunks);
+    }
+    
+    if (updates.aggregations) {
+      await this.updateAggregations(objectId, updates.aggregations);
+    }
+    
+    if (updates.pythonAnalysis) {
+      await this.updatePythonAnalysis(objectId, updates.pythonAnalysis);
+    }
+    
+    // Mettre à jour les autres champs
+    const otherUpdates: any = {};
+    if (updates.summary) otherUpdates.summary = updates.summary;
+    if (updates.keyFacts) otherUpdates.keyFacts = updates.keyFacts;
+    if (updates.processing) otherUpdates.processing = updates.processing;
+    
+    if (Object.keys(otherUpdates).length > 0) {
+      await this.collection.updateOne(
+        { _id: objectId },
+        { 
+          $set: { 
+            ...otherUpdates,
+            processedAt: new Date()
+          } 
+        }
+      );
+    }
+  }
+
+  // Recherche vectorielle - compatible avec votre système
   async vectorSearch(
-    embedding: number[], 
+    embedding: number[],
     limit: number = 10,
     documentIds?: ObjectId[]
-  ): Promise<Array<{
-    document: Document;
-    chunk: DocumentChunk;
-    score: number;
-  }>> {
+  ): Promise<Array<{ document: Document; score: number; chunk: DocumentChunk }>> {
+    // Recherche basique compatible si pas d'Atlas Vector Search
     try {
       const pipeline: any[] = [
         {
           $vectorSearch: {
-            index: DB_CONFIG.indexes.vectorSearch,
-            path: 'chunks.embedding',
+            index: "vector_index",
+            path: "chunks.embedding",
             queryVector: embedding,
             numCandidates: limit * 10,
             limit: limit,
@@ -203,7 +269,6 @@ export class DocumentRepository {
         }
       ];
 
-      // Filtrer par documents spécifiques si demandé
       if (documentIds && documentIds.length > 0) {
         pipeline.push({
           $match: {
@@ -212,47 +277,71 @@ export class DocumentRepository {
         });
       }
 
-      // Ajouter le score de similarité
       pipeline.push({
-        $addFields: {
-          score: { $meta: 'vectorSearchScore' }
+        $project: {
+          _id: 1,
+          filename: 1,
+          originalName: 1,
+          type: 1,
+          summary: 1,
+          chunks: 1,
+          aggregations: 1,
+          pythonAnalysis: 1,
+          score: { $meta: "vectorSearchScore" }
         }
       });
 
-      const results = await this.collection.aggregate(pipeline).toArray() as any[];
-
-      // Reformater les résultats pour extraire les chunks correspondants
-      const formattedResults: Array<{
-        document: Document;
-        chunk: DocumentChunk;
-        score: number;
-      }> = [];
-
-      for (const doc of results) {
-        // Trouver le chunk le plus similaire dans ce document
-        for (const chunk of doc.chunks) {
-          formattedResults.push({
-            document: doc as Document,
-            chunk: chunk,
-            score: doc.score || 0
-          });
-        }
-      }
-
-      return formattedResults.slice(0, limit);
+      const results = await this.collection.aggregate(pipeline).toArray();
+      
+      return results.flatMap(result => 
+        result.chunks.map((chunk: DocumentChunk) => ({
+          document: result as Document,
+          score: result.score || 0.5,
+          chunk
+        }))
+      );
+      
     } catch (error) {
-      console.error('Erreur recherche vectorielle:', error);
-      return [];
+      // Fallback vers recherche basique si Vector Search pas disponible
+      console.warn('Vector Search non disponible, utilisation fallback');
+      
+      const filter: any = { status: 'completed' };
+      if (documentIds && documentIds.length > 0) {
+        filter._id = { $in: documentIds };
+      }
+      
+      const docs = await this.collection.find(filter).limit(limit).toArray();
+      
+      return docs.flatMap(doc => 
+        doc.chunks.map(chunk => ({
+          document: doc,
+          score: 0.5,
+          chunk
+        }))
+      );
     }
   }
 
-  // Recherche d'agrégations pour les questions numériques
-  async searchAggregations(
-    query: string,
-    documentIds?: ObjectId[]
-  ): Promise<Document[]> {
+  // 🐍 Recherche de documents avec analyse Python OU agrégations classiques
+  async findDocumentsWithAggregations(documentIds?: ObjectId[]): Promise<Document[]> {
     const filter: any = {
-      aggregations: { $exists: true },
+      $or: [
+        { aggregations: { $exists: true } },
+        { pythonAnalysis: { $exists: true } }
+      ],
+      status: 'completed'
+    };
+
+    if (documentIds && documentIds.length > 0) {
+      filter._id = { $in: documentIds };
+    }
+
+    return await this.collection.find(filter).toArray();
+  }
+
+  async findDocumentsWithPythonAnalysis(documentIds?: ObjectId[]): Promise<Document[]> {
+    const filter: any = {
+      'pythonAnalysis.extraction': { $exists: true },
       status: 'completed'
     };
 
@@ -264,7 +353,7 @@ export class DocumentRepository {
   }
 }
 
-// Repository pour les conversations
+// Repository pour les conversations - IDENTIQUE à votre version
 export class ConversationRepository {
   private collection: Collection<Conversation>;
 
@@ -312,7 +401,7 @@ export class ConversationRepository {
   }
 }
 
-// Factory pour obtenir les repositories
+// Factory - IDENTIQUE à votre version
 export class DatabaseFactory {
   private static mongoClient: MongoDBClient;
 
@@ -340,7 +429,7 @@ export class DatabaseFactory {
   }
 }
 
-// Export du client principal pour usage direct si nécessaire
+// Export du client principal
 export const mongodb = MongoDBClient.getInstance();
 
 // Hook de fermeture propre

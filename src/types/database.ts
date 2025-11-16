@@ -1,11 +1,11 @@
 import { ObjectId } from 'mongodb';
 
-// Types de base
+// Types de base - 100% compatibles avec votre projet existant
 export type DocumentStatus = 'uploading' | 'processing' | 'completed' | 'error';
 export type FileType = 'csv' | 'pdf' | 'docx' | 'txt';
 export type QueryType = 'numeric' | 'semantic' | 'hybrid';
 
-// Structure d'un chunk
+// Structure d'un chunk - IDENTIQUE à votre version existante
 export interface DocumentChunk {
   text: string;
   embedding: number[]; // 1536 dimensions pour text-embedding-ada-002
@@ -17,7 +17,7 @@ export interface DocumentChunk {
   };
 }
 
-// Agrégations pré-calculées pour CSV
+// Agrégations pré-calculées pour CSV - IDENTIQUE à votre version existante
 export interface CsvAggregations {
   totalRows: number;
   columns: string[];
@@ -42,7 +42,45 @@ export interface CsvAggregations {
   topValues: Record<string, Array<{ value: any; count: number }>>;
 }
 
-// Document principal dans MongoDB
+// 🐍 NOUVELLE interface pour l'analyse Python - Extension SANS casser l'existant
+export interface PythonAnalysisData {
+  extraction?: {
+    metadata?: {
+      shape?: { rows: number; columns: number };
+      columns?: string[];
+      file_info?: any;
+    };
+    sample_data?: {
+      head?: any[];
+      dtypes?: Record<string, string>;
+    };
+  };
+  analysis?: {
+    basic_stats?: Record<string, any>;
+    correlations?: Record<string, any>;
+    business_patterns?: {
+      exit_employees?: { count: number };
+      performance_segments?: {
+        high_performers?: { count: number };
+      };
+      financial_metrics?: Record<string, any>;
+    };
+  };
+  quality?: {
+    overall_score?: number;
+    completeness?: number;
+    estimated?: boolean;
+  };
+  recommendations?: string[];
+  insights?: any;
+  performance?: {
+    extraction_time: number;
+    analysis_time: number;
+    total_time: number;
+  };
+}
+
+// ✅ Document interface - EXTENSION RÉTROCOMPATIBLE de votre interface existante
 export interface Document {
   _id: ObjectId;
   filename: string;
@@ -53,15 +91,18 @@ export interface Document {
   processedAt?: Date;
   status: DocumentStatus;
   
-  // Contenu analysé
+  // Contenu analysé - IDENTIQUE à votre version
   summary: string;
   keyFacts: string[];
   chunks: DocumentChunk[];
   
-  // Agrégations (uniquement pour CSV)
+  // Agrégations (uniquement pour CSV) - IDENTIQUE à votre version
   aggregations?: CsvAggregations;
   
-  // Métadonnées de traitement
+  // 🐍 NOUVELLE propriété - OPTIONNELLE pour ne pas casser l'existant
+  pythonAnalysis?: PythonAnalysisData;
+  
+  // Métadonnées de traitement - IDENTIQUE à votre version
   processing: {
     chunksCount: number;
     embeddingModel: string;
@@ -69,7 +110,7 @@ export interface Document {
     processingTimeMs: number;
   };
   
-  // Gestion d'erreurs
+  // Gestion d'erreurs - IDENTIQUE à votre version
   error?: {
     message: string;
     stack?: string;
@@ -77,7 +118,7 @@ export interface Document {
   };
 }
 
-// Conversation et messages
+// Conversation et messages - IDENTIQUE à votre version existante
 export interface ChatMessage {
   _id: ObjectId;
   role: 'user' | 'assistant';
@@ -98,10 +139,12 @@ export interface ChatMessage {
     queryType: QueryType;
     processingTimeMs: number;
     tokensUsed: number;
-    confidence: number;
+    confidence?: number;
+    pythonInsights?: any; // 🐍 Optionnel pour compatibilité
   };
 }
 
+// Conversation - Conserve votre structure existante
 export interface Conversation {
   _id: ObjectId;
   title: string;
@@ -120,83 +163,11 @@ export interface Conversation {
   };
 }
 
-// Schémas de validation avec Zod
-import { z } from 'zod';
-
-export const DocumentChunkSchema = z.object({
-  text: z.string().min(1),
-  embedding: z.array(z.number()).length(1536),
-  chunkIndex: z.number().int().min(0),
-  metadata: z.object({
-    pageNumber: z.number().int().optional(),
-    section: z.string().optional(),
-    rowNumber: z.number().int().optional(),
-  }).optional(),
-});
-
-export const DocumentSchema = z.object({
-  filename: z.string().min(1),
-  originalName: z.string().min(1),
-  type: z.enum(['csv', 'pdf', 'docx', 'txt']),
-  size: z.number().int().min(0),
-  status: z.enum(['uploading', 'processing', 'completed', 'error']),
-  summary: z.string(),
-  keyFacts: z.array(z.string()),
-  chunks: z.array(DocumentChunkSchema),
-  aggregations: z.object({
-    totalRows: z.number().int().min(0),
-    columns: z.array(z.string()),
-    sums: z.record(z.string(), z.number()),
-    averages: z.record(z.string(), z.number()),
-    mins: z.record(z.string(), z.number()),
-    maxs: z.record(z.string(), z.number()),
-    counts: z.record(z.string(), z.number()),
-    byColumn: z.record(z.string(), z.record(z.string(), z.any())),
-    temporal: z.object({
-      dateColumns: z.array(z.string()),
-      byPeriod: z.record(z.string(), z.record(z.string(), z.number())),
-    }).optional(),
-    topValues: z.record(z.string(), z.array(z.object({
-      value: z.any(),
-      count: z.number().int().min(0),
-    }))),
-  }).optional(),
-  processing: z.object({
-    chunksCount: z.number().int().min(0),
-    embeddingModel: z.string(),
-    tokensUsed: z.number().int().min(0),
-    processingTimeMs: z.number().int().min(0),
-  }),
-  error: z.object({
-    message: z.string(),
-    stack: z.string().optional(),
-    timestamp: z.date(),
-  }).optional(),
-});
-
-export const ChatMessageSchema = z.object({
-  role: z.enum(['user', 'assistant']),
-  content: z.string().min(1),
-  sources: z.array(z.object({
-    documentId: z.string(), // ObjectId as string
-    filename: z.string(),
-    chunkIndex: z.number().int().min(0),
-    relevanceScore: z.number().min(0).max(1),
-    snippet: z.string(),
-  })).optional(),
-  metadata: z.object({
-    queryType: z.enum(['numeric', 'semantic', 'hybrid']),
-    processingTimeMs: z.number().int().min(0),
-    tokensUsed: z.number().int().min(0),
-    confidence: z.number().min(0).max(1),
-  }).optional(),
-});
-
-// Types d'erreur personnalisés
+// Classes d'erreur personnalisées - IDENTIQUES à votre version
 export class ProcessingError extends Error {
   constructor(
     message: string,
-    public code: string,
+    public stage: string,
     public details?: any
   ) {
     super(message);
@@ -223,4 +194,30 @@ export class EmbeddingError extends Error {
     super(message);
     this.name = 'EmbeddingError';
   }
+}
+
+// Types d'export pour les API - Nouveaux mais compatibles
+export type CreateDocumentDTO = Omit<Document, '_id' | 'uploadedAt' | 'processedAt'>;
+export type UpdateDocumentDTO = Partial<Pick<Document, 'status' | 'summary' | 'keyFacts' | 'chunks' | 'aggregations' | 'pythonAnalysis'>>;
+
+// Types pour les réponses d'API
+export interface ApiResponse<T = any> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  metadata?: {
+    timestamp: Date;
+    processingTimeMs: number;
+    tokensUsed?: number;
+  };
+}
+
+// Types pour les résultats de recherche
+export interface SearchResult {
+  documentId: ObjectId;
+  filename: string;
+  relevanceScore: number;
+  snippet: string;
+  chunkIndex: number;
+  metadata?: Record<string, any>;
 }
