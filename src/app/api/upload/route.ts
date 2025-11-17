@@ -1,11 +1,14 @@
+/**
+ * API Upload - VERSION VERCEL COMPATIBLE
+ * AUCUN stockage local - tout dans MongoDB
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
 import { ObjectId } from 'mongodb';
 import { DatabaseFactory } from '@/lib/mongodb';
 import { pythonClient } from '@/lib/python-client';
 import { createEmbeddings, extractDocumentMetadata } from '@/lib/openai';
-import { FILE_CONFIG } from '@/lib/config';
+import { FILE_CONFIG, CHUNK_CONFIG } from '@/lib/config';
 import type { Document, DocumentChunk } from '@/types/database';
 
 // Configuration pour Next.js
@@ -43,9 +46,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Traitement du fichier
+    // Traitement du fichier SANS stockage local
     const startTime = Date.now();
-    const processingResult = await processFileWithPython(file);
+    const processingResult = await processFileDirectly(file);
     const processingTime = Date.now() - startTime;
 
     return NextResponse.json({
@@ -62,7 +65,8 @@ export async function POST(request: NextRequest) {
         keyFacts: processingResult.keyFacts,
         processingTimeMs: processingTime,
         tokensUsed: processingResult.tokensUsed,
-        pythonAnalysis: processingResult.pythonAnalysis,
+        pythonAnalysis: processingResult.pythonAnalysis, // ✅ Données Python complètes
+        aggregations: processingResult.aggregations, // ✅ Agrégations pré-calculées
       }
     });
 
@@ -103,9 +107,9 @@ function validateFile(file: File): string | null {
 }
 
 /**
- * Traite un fichier avec l'API Python - 100% compatible avec votre code existant
+ * ✅ NOUVEAU: Traite un fichier DIRECTEMENT sans stockage local
  */
-async function processFileWithPython(file: File): Promise<{
+async function processFileDirectly(file: File): Promise<{
   documentId: ObjectId;
   filename: string;
   type: string;
@@ -113,172 +117,170 @@ async function processFileWithPython(file: File): Promise<{
   summary: string;
   keyFacts: string[];
   tokensUsed: number;
-  pythonAnalysis: any; // Type any pour éviter les erreurs TypeScript
+  pythonAnalysis: any;
+  aggregations: any;
 }> {
-  // Générer un nom de fichier unique
+  // Générer un nom de fichier unique (juste pour l'identification)
   const timestamp = Date.now();
   const randomSuffix = Math.random().toString(36).substring(2, 8);
   const fileExtension = file.name.split('.').pop() || '';
   const filename = `${timestamp}_${randomSuffix}.${fileExtension}`;
 
-  // Sauvegarder temporairement le fichier
-  await saveFileTemporarily(filename, await file.arrayBuffer());
-
-  const { documents } = await DatabaseFactory.getRepositories();
-
-  // Créer l'entrée document initiale - EXACT comme votre interface Document
-  const documentId = await documents.create({
-    filename,
-    originalName: file.name,
-    type: FILE_CONFIG.supportedTypes[file.type as keyof typeof FILE_CONFIG.supportedTypes],
-    size: file.size,
-    uploadedAt: new Date(),
-    status: 'processing',
-    summary: '',
-    keyFacts: [],
-    chunks: [],
-    processing: {
-      chunksCount: 0,
-      embeddingModel: 'text-embedding-ada-002',
-      tokensUsed: 0,
-      processingTimeMs: 0,
-    },
-    // PAS de pythonAnalysis car pas dans votre interface Document
-  });
-
-  let totalTokensUsed = 0;
-
   try {
-    // 🐍 ÉTAPE 1 : Analyse Python
-    console.log('🐍 Démarrage analyse Python...');
-    const pythonResult = await pythonClient.processFileComplete(file);
-    
-    if (!pythonResult.success) {
-      throw new Error(pythonResult.error || 'Erreur analyse Python');
-    }
+    // Obtenir les repositories
+    const { documents } = await DatabaseFactory.getRepositories();
 
-    console.log('✅ Analyse Python terminée');
-
-    // 🤖 ÉTAPE 2 : Métadonnées OpenAI
-    const textForMetadata = generateTextFromPythonAnalysis(pythonResult);
-    const metadata = await extractDocumentMetadata(textForMetadata, 'csv');
-    totalTokensUsed += metadata.tokensUsed;
-
-    // 🔗 ÉTAPE 3 : Créer les chunks
-    const chunks = createChunksFromPythonData(pythonResult);
-    
-    // 🧠 ÉTAPE 4 : Générer les embeddings
-    const embeddingResult = await createEmbeddings(
-      chunks.map(chunk => chunk.text)
-    );
-    totalTokensUsed += embeddingResult.tokensUsed;
-
-    // 📦 ÉTAPE 5 : Construire les chunks finaux
-    const finalChunks: DocumentChunk[] = chunks.map((chunk, index) => ({
-      text: chunk.text,
-      embedding: embeddingResult.embeddings[index],
-      chunkIndex: index,
-      metadata: chunk.metadata || {}
-    }));
-
-    // 💾 ÉTAPE 6 : Sauvegarder avec VOS méthodes existantes UNIQUEMENT
-    await documents.updateChunks(documentId, finalChunks);
-
-    // Sauvegarder les agrégations Python (format adapté à votre CsvAggregations)
-    if (pythonResult.analysis) {
-      const aggregations = convertPythonToMongoAggregations(pythonResult);
-      await documents.updateAggregations(documentId, aggregations);
-    }
-
-    // Marquer comme terminé
-    await documents.updateStatus(documentId, 'completed');
-
-    // 🔄 ÉTAPE 7 : Mise à jour finale via accès direct (comme dans votre code)
-    // Utilisation de la même approche que dans votre upload existant
-    const { documents: documentsRepo } = await DatabaseFactory.getRepositories();
-    const collection = (documentsRepo as any).collection;
-    
-    await collection.updateOne(
-      { _id: documentId },
-      {
-        $set: {
-          summary: metadata.summary,
-          keyFacts: metadata.keyFacts,
-          'processing.tokensUsed': totalTokensUsed,
-          'processing.chunksCount': finalChunks.length,
-          'processing.processingTimeMs': pythonResult.performance?.total_time || 0,
-          // Sauvegarder pythonAnalysis comme champ libre (pas dans interface Document)
-          pythonAnalysis: pythonResult,
-          processedAt: new Date()
-        }
-      }
-    );
-
-    console.log(`✅ Document ${filename} traité avec succès`);
-    
-    return {
-      documentId,
+    // Créer l'entrée document initiale
+    const documentId = await documents.create({
       filename,
+      originalName: file.name,
       type: FILE_CONFIG.supportedTypes[file.type as keyof typeof FILE_CONFIG.supportedTypes],
-      chunksCount: finalChunks.length,
-      summary: metadata.summary,
-      keyFacts: metadata.keyFacts,
-      tokensUsed: totalTokensUsed,
-      pythonAnalysis: pythonResult // Retour du résultat Python complet
-    };
+      size: file.size,
+      uploadedAt: new Date(),
+      status: 'processing',
+      summary: '',
+      keyFacts: [],
+      chunks: [],
+      processing: {
+        chunksCount: 0,
+        embeddingModel: 'text-embedding-ada-002',
+        tokensUsed: 0,
+        processingTimeMs: 0,
+      },
+    });
+
+    let totalTokensUsed = 0;
+
+    try {
+      // 🐍 ÉTAPE 1 : Analyse Python DIRECTE (sans fichier temporaire)
+      console.log('🐍 Démarrage analyse Python directe...');
+      
+      // ✅ Passer le fichier DIRECTEMENT à Python
+      const pythonResult = await pythonClient.processFileComplete(file);
+      
+      if (!pythonResult.success) {
+        throw new Error(pythonResult.error || 'Erreur analyse Python');
+      }
+
+      console.log('✅ Analyse Python terminée');
+
+      // 🤖 ÉTAPE 2 : Extraire métadonnées avec OpenAI
+      const textForMetadata = generateTextFromPythonAnalysis(pythonResult.data);
+      const metadata = await extractDocumentMetadata(textForMetadata, 'csv');
+      totalTokensUsed += metadata.tokensUsed;
+
+      // 🔗 ÉTAPE 3 : Créer les chunks pour recherche vectorielle
+      const chunks = createChunksFromPythonData(pythonResult.data);
+      
+      // 🧠 ÉTAPE 4 : Générer les embeddings pour les chunks
+      const embeddingResult = await createEmbeddings(
+        chunks.map(chunk => chunk.text)
+      );
+      totalTokensUsed += embeddingResult.tokensUsed;
+
+      // 📦 ÉTAPE 5 : Construire les chunks finaux
+      const finalChunks: DocumentChunk[] = chunks.map((chunk, index) => ({
+        text: chunk.text,
+        embedding: embeddingResult.embeddings[index],
+        chunkIndex: index,
+        metadata: chunk.metadata
+      }));
+
+      // 📊 ÉTAPE 6 : Convertir agrégations Python pour MongoDB
+      const aggregations = convertPythonToMongoAggregations(pythonResult.data);
+
+      // 💾 ÉTAPE 7 : Sauvegarder TOUT dans MongoDB
+      const finalDocument = {
+        summary: metadata.summary,
+        keyFacts: metadata.keyFacts,
+        chunks: finalChunks,
+        aggregations: aggregations,
+        pythonAnalysis: pythonResult.data, // ✅ Analyse complète sauvegardée
+        status: 'completed' as const,
+        processedAt: new Date(),
+        processing: {
+          chunksCount: finalChunks.length,
+          embeddingModel: 'text-embedding-ada-002',
+          tokensUsed: totalTokensUsed,
+          processingTimeMs: 0, // Sera calculé par l'appelant
+        },
+      };
+
+      // Mettre à jour le document
+      await documents.updateDocument(documentId, finalDocument);
+
+      console.log(`✅ Document sauvegardé: ${finalChunks.length} chunks, ${totalTokensUsed} tokens`);
+
+      return {
+        documentId,
+        filename,
+        type: FILE_CONFIG.supportedTypes[file.type as keyof typeof FILE_CONFIG.supportedTypes],
+        chunksCount: finalChunks.length,
+        summary: metadata.summary,
+        keyFacts: metadata.keyFacts,
+        tokensUsed: totalTokensUsed,
+        pythonAnalysis: pythonResult.data,
+        aggregations: aggregations
+      };
+
+    } catch (error) {
+      // Marquer le document comme erreur
+      await documents.updateDocument(documentId, {
+        status: 'error',
+        error: {
+          message: error instanceof Error ? error.message : 'Erreur inconnue',
+          timestamp: new Date()
+        }
+      });
+      throw error;
+    }
 
   } catch (error) {
-    console.error('❌ Erreur traitement:', error);
-    
-    // Utiliser VOTRE méthode existante setError
-    await documents.setError(
-      documentId,
-      error instanceof Error ? error.message : 'Erreur de traitement',
-      error instanceof Error ? error.stack : undefined
-    );
-    
+    console.error('❌ Erreur traitement fichier:', error);
     throw error;
   }
 }
 
 /**
- * Génère du texte pour les métadonnées depuis l'analyse Python
+ * Génère du texte pour OpenAI à partir de l'analyse Python
  */
 function generateTextFromPythonAnalysis(pythonResult: any): string {
-  const parts: string[] = [];
-
-  // Accès sécurisé aux données Python
-  if (pythonResult.extraction?.metadata) {
-    const meta = pythonResult.extraction.metadata;
-    if (meta.shape) {
-      parts.push(`Dataset avec ${meta.shape.rows || 0} lignes et ${meta.shape.columns || 0} colonnes`);
-    }
-    
-    if (meta.columns && Array.isArray(meta.columns)) {
-      parts.push(`Colonnes: ${meta.columns.join(', ')}`);
-    }
+  const extraction = pythonResult?.extraction;
+  const analysis = pythonResult?.analysis;
+  
+  if (!extraction) {
+    return 'Document CSV analysé automatiquement';
   }
 
-  if (pythonResult.analysis?.business_patterns) {
-    const patterns = pythonResult.analysis.business_patterns;
-    
+  const parts = [
+    `Document CSV: ${extraction.metadata?.shape?.rows || 0} lignes, ${extraction.metadata?.shape?.columns || 0} colonnes`,
+    `Colonnes: ${extraction.metadata?.columns?.join(', ') || 'N/A'}`,
+  ];
+
+  // Ajouter les insights business si disponibles
+  if (analysis?.business_patterns) {
+    const patterns = analysis.business_patterns;
+    if (patterns.sixt_agents?.total_agents) {
+      parts.push(`Agents SIXT: ${patterns.sixt_agents.total_agents}`);
+    }
+    if (patterns.financial_data?.total_revenue) {
+      parts.push(`Revenue total: ${patterns.financial_data.total_revenue}`);
+    }
     if (patterns.exit_employees?.count) {
-      parts.push(`Exit Employees détectés: ${patterns.exit_employees.count}`);
-    }
-    
-    if (patterns.financial_metrics) {
-      const metrics = Object.keys(patterns.financial_metrics);
-      if (metrics.length > 0) {
-        parts.push(`Métriques financières: ${metrics.join(', ')}`);
-      }
+      parts.push(`Exit Employees: ${patterns.exit_employees.count}`);
     }
   }
 
-  if (pythonResult.recommendations && Array.isArray(pythonResult.recommendations)) {
-    parts.push('Recommandations: ' + pythonResult.recommendations.slice(0, 3).join(', '));
+  // Ajouter un échantillon de données
+  if (extraction.sample_data?.head) {
+    parts.push('Échantillon de données:');
+    parts.push(...extraction.sample_data.head.slice(0, 2).map((row: any, idx: number) => {
+      const rowData = Object.entries(row).slice(0, 3).map(([col, val]) => `${col}: ${val}`).join(', ');
+      return `Ligne ${idx + 1}: ${rowData}`;
+    }));
   }
 
-  return parts.length > 0 ? parts.join('\n') : 'Analyse de données effectuée';
+  return parts.join('\n');
 }
 
 /**
@@ -286,73 +288,66 @@ function generateTextFromPythonAnalysis(pythonResult: any): string {
  */
 function createChunksFromPythonData(pythonResult: any): Array<{
   text: string;
-  metadata?: {
-    pageNumber?: number;
-    section?: string;
-    rowNumber?: number;
-  };
+  metadata?: any;
 }> {
   const chunks: Array<{ text: string; metadata?: any }> = [];
 
-  // Chunk 1: Métadonnées
-  if (pythonResult.extraction?.metadata) {
-    const meta = pythonResult.extraction.metadata;
-    const metaText = [
-      `Dataset: ${meta.shape?.rows || 0} lignes, ${meta.shape?.columns || 0} colonnes`,
-      meta.columns && Array.isArray(meta.columns) ? `Colonnes: ${meta.columns.join(', ')}` : '',
-    ].filter(Boolean).join('\n');
+  // Chunk 1: Métadonnées et structure
+  const extraction = pythonResult?.extraction;
+  if (extraction?.metadata) {
+    const metadataText = [
+      `Analyse du fichier CSV:`,
+      `Dimensions: ${extraction.metadata.shape?.rows || 0} lignes × ${extraction.metadata.shape?.columns || 0} colonnes`,
+      `Colonnes: ${extraction.metadata.columns?.join(', ') || 'N/A'}`,
+      `Types détectés: ${Object.entries(extraction.dataframe_data?.dtypes || {}).map(([col, type]) => `${col}: ${type}`).join(', ')}`
+    ].join('\n');
 
-    if (metaText.trim()) {
-      chunks.push({
-        text: metaText,
-        metadata: { section: 'metadata' }
-      });
-    }
+    chunks.push({
+      text: metadataText,
+      metadata: { type: 'metadata', section: 'structure' }
+    });
   }
 
   // Chunk 2: Patterns business
-  if (pythonResult.analysis?.business_patterns) {
-    const patterns = pythonResult.analysis.business_patterns;
+  const analysis = pythonResult?.analysis;
+  if (analysis?.business_patterns) {
+    const patterns = analysis.business_patterns;
     const patternsText = [
-      'Analyse business:',
-      patterns.exit_employees?.count ? `Exit Employees: ${patterns.exit_employees.count}` : '',
-      patterns.performance_segments?.high_performers?.count ? `Top performers: ${patterns.performance_segments.high_performers.count}` : ''
+      'Patterns métier détectés:',
+      patterns.sixt_agents ? `Agents SIXT: ${patterns.sixt_agents.total_agents} agents détectés` : '',
+      patterns.exit_employees ? `Exit Employees: ${patterns.exit_employees.count}` : '',
+      patterns.financial_data ? `Données financières: ${patterns.financial_data.columns_detected?.join(', ')}` : '',
+      patterns.performance_segments ? `Segments performance: ${patterns.performance_segments.high_performers?.count} top performers` : ''
     ].filter(Boolean).join('\n');
 
-    if (patternsText !== 'Analyse business:') {
-      chunks.push({
-        text: patternsText,
-        metadata: { section: 'business_patterns' }
-      });
-    }
+    chunks.push({
+      text: patternsText,
+      metadata: { type: 'business_patterns', section: 'analysis' }
+    });
   }
 
   // Chunk 3: Échantillon de données
-  if (pythonResult.extraction?.sample_data?.head && Array.isArray(pythonResult.extraction.sample_data.head)) {
-    const sampleData = pythonResult.extraction.sample_data.head;
-    const sampleRows = sampleData.slice(0, 3).map((row: any, idx: number) => {
-      if (row && typeof row === 'object') {
-        const rowData = Object.entries(row)
-          .map(([col, val]) => `${col}: ${val}`)
-          .join(', ');
+  if (extraction?.sample_data?.head) {
+    const sampleData = extraction.sample_data.head;
+    const sampleText = [
+      'Échantillon de données:',
+      ...sampleData.slice(0, 3).map((row: any, idx: number) => {
+        const rowData = Object.entries(row).map(([col, val]) => `${col}: ${val}`).join(', ');
         return `Ligne ${idx + 1}: ${rowData}`;
-      }
-      return `Ligne ${idx + 1}: ${JSON.stringify(row)}`;
-    });
+      })
+    ].join('\n');
 
-    if (sampleRows.length > 0) {
-      chunks.push({
-        text: 'Échantillon de données:\n' + sampleRows.join('\n'),
-        metadata: { section: 'sample_data' }
-      });
-    }
+    chunks.push({
+      text: sampleText,
+      metadata: { type: 'sample_data', section: 'data' }
+    });
   }
 
-  // Chunk par défaut si aucun chunk créé
+  // Si aucun chunk généré, créer un chunk par défaut
   if (chunks.length === 0) {
     chunks.push({
-      text: 'Document analysé par Python avec succès',
-      metadata: { section: 'default' }
+      text: 'Document CSV analysé et indexé pour recherche',
+      metadata: { type: 'default', section: 'fallback' }
     });
   }
 
@@ -360,10 +355,9 @@ function createChunksFromPythonData(pythonResult: any): Array<{
 }
 
 /**
- * Convertit l'analyse Python au format CsvAggregations MongoDB existant
+ * Convertit l'analyse Python au format MongoDB
  */
 function convertPythonToMongoAggregations(pythonResult: any): any {
-  // Format exact de votre interface CsvAggregations
   const aggregations: any = {
     totalRows: pythonResult.extraction?.metadata?.shape?.rows || 0,
     columns: pythonResult.extraction?.metadata?.columns || [],
@@ -376,40 +370,26 @@ function convertPythonToMongoAggregations(pythonResult: any): any {
     topValues: {},
   };
 
-  // Convertir les métriques financières Python si disponibles
+  // Convertir les métriques financières Python
   if (pythonResult.analysis?.business_patterns?.financial_metrics) {
     const financial = pythonResult.analysis.business_patterns.financial_metrics;
     
     Object.entries(financial).forEach(([col, metrics]: [string, any]) => {
-      if (metrics && typeof metrics === 'object') {
-        aggregations.sums[col] = metrics.total || 0;
-        aggregations.averages[col] = metrics.average || 0;
-        aggregations.mins[col] = metrics.min || 0;
-        aggregations.maxs[col] = metrics.max || 0;
-        aggregations.counts[col] = metrics.count || 0;
-      }
+      if (metrics.total !== undefined) aggregations.sums[col] = metrics.total;
+      if (metrics.average !== undefined) aggregations.averages[col] = metrics.average;
+      if (metrics.min !== undefined) aggregations.mins[col] = metrics.min;
+      if (metrics.max !== undefined) aggregations.maxs[col] = metrics.max;
+      if (metrics.count !== undefined) aggregations.counts[col] = metrics.count;
     });
+  }
+
+  // Ajouter les groupements si disponibles
+  if (pythonResult.analysis?.aggregations) {
+    aggregations.byColumn = pythonResult.analysis.aggregations;
   }
 
   return aggregations;
 }
 
-/**
- * Sauvegarde temporairement un fichier
- */
-async function saveFileTemporarily(filename: string, buffer: ArrayBuffer): Promise<void> {
-  const uploadDir = join(process.cwd(), 'temp', 'uploads');
-  
-  try {
-    await mkdir(uploadDir, { recursive: true });
-    await writeFile(join(uploadDir, filename), Buffer.from(buffer));
-  } catch (error) {
-    console.error('Erreur sauvegarde temporaire:', error);
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error('Erreur sauvegarde fichier');
-    }
-  }
-}
-
 // Export pour les tests
-export { validateFile, processFileWithPython };
+export { validateFile, processFileDirectly };

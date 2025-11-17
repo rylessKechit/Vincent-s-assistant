@@ -1,5 +1,6 @@
 /**
- * Configuration globale pour AI-Assistant
+ * Configuration globale pour AI-Assistant - VERSION VERCEL
+ * AUCUN stockage local
  */
 
 // Configuration des chunks
@@ -20,7 +21,7 @@ export const FILE_CONFIG = {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
     'text/plain': 'txt',
   },
-  uploadPath: '/tmp/uploads',
+  // ✅ SUPPRIMÉ: uploadPath (plus de stockage local pour Vercel)
 } as const;
 
 // Configuration OpenAI
@@ -87,4 +88,29 @@ export const ENV_CONFIG = {
   isProduction: process.env.NODE_ENV === 'production',
   logLevel: process.env.LOG_LEVEL || (process.env.NODE_ENV === 'development' ? 'debug' : 'info'),
   port: process.env.PORT ? parseInt(process.env.PORT) : 3000,
+  
+  // ✅ Vercel-specific configuration
+  isVercel: !!process.env.VERCEL,
+  deploymentUrl: process.env.VERCEL_URL,
+} as const;
+
+// ✅ NOUVEAU: Configuration pour le stockage sans fichiers locaux
+export const STORAGE_CONFIG = {
+  // Tout en mémoire et MongoDB - pas de fichiers temporaires
+  useMemoryOnly: true,
+  maxFileBufferSize: FILE_CONFIG.maxSize, // 50MB en mémoire max
+  
+  // Fallback pour développement local (si vraiment nécessaire)
+  tempDir: process.env.NODE_ENV === 'development' ? '/tmp/uploads' : null,
+} as const;
+
+// ✅ Configuration spécifique Vercel
+export const VERCEL_CONFIG = {
+  // Limites Vercel
+  maxExecutionTime: 10000, // 10s pour Hobby plan
+  maxPayloadSize: FILE_CONFIG.maxSize, // 50MB
+  
+  // Optimisations pour Vercel
+  enableEdgeOptimization: false, // Pas compatible avec file processing
+  useServerlessMode: true,
 } as const;

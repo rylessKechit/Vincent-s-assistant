@@ -260,3 +260,5 @@ MIT License - voir [LICENSE](LICENSE) pour plus de détails.
 ---
 
 **Fait avec ❤️ pour optimiser l'analyse de données métier**
+
+uvicorn main:app --reload --port 8000

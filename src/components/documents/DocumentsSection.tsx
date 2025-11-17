@@ -3,19 +3,22 @@
 import { useState, useEffect } from 'react';
 
 interface Document {
-  id: string;
+  _id: string;
   filename: string;
-  type: string;
+  originalName: string;
+  size: number;
   uploadedAt: string;
-  summary: string;
-  rowCount: number;
-  chunksCount: number;
+  status: 'processing' | 'completed' | 'error';
+  chunksCount?: number;
+  summary?: string;
+  processing?: {
+    tokensUsed?: number;
+  };
 }
 
 export function DocumentsSection() {
   const [documents, setDocuments] = useState<Document[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedDoc, setSelectedDoc] = useState<string | null>(null);
 
   useEffect(() => {
     fetchDocuments();
@@ -23,7 +26,7 @@ export function DocumentsSection() {
 
   const fetchDocuments = async () => {
     try {
-      const response = await fetch('/api/chat');
+      const response = await fetch('/api/documents');
       const data = await response.json();
       
       if (data.success) {
@@ -36,27 +39,48 @@ export function DocumentsSection() {
     }
   };
 
-  const deleteDocument = async (docId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce document ?')) return;
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
 
-    try {
-      const response = await fetch(`/api/documents/${docId}`, {
-        method: 'DELETE'
-      });
+  const formatDate = (dateStr: string): string => {
+    return new Date(dateStr).toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
 
-      if (response.ok) {
-        setDocuments(prev => prev.filter(doc => doc.id !== docId));
-      }
-    } catch (error) {
-      console.error('Erreur suppression:', error);
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed': return 'text-green-600 bg-green-100';
+      case 'processing': return 'text-orange-600 bg-orange-100';
+      case 'error': return 'text-red-600 bg-red-100';
+      default: return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch (status) {
+      case 'completed': return 'Analysé';
+      case 'processing': return 'En cours';
+      case 'error': return 'Erreur';
+      default: return 'Inconnu';
     }
   };
 
   if (loading) {
     return (
       <div className="space-y-3">
-        {[1, 2, 3].map(i => (
-          <div key={i} className="bg-slate-100 rounded-lg h-20 animate-pulse" />
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="animate-pulse">
+            <div className="h-16 bg-gray-200 rounded-lg"></div>
+          </div>
         ))}
       </div>
     );
@@ -64,148 +88,98 @@ export function DocumentsSection() {
 
   if (documents.length === 0) {
     return (
-      <div className="text-center py-8 space-y-3">
-        <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto">
-          <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div className="text-center py-8">
+        <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
         </div>
-        <div>
-          <p className="text-sm font-medium text-slate-900">Aucun document</p>
-          <p className="text-xs text-slate-500">
-            Uploadez un fichier CSV pour commencer
-          </p>
-        </div>
+        <h3 className="text-lg font-medium text-gray-900 mb-2">
+          Aucun fichier
+        </h3>
+        <p className="text-sm text-gray-600">
+          Upload ton premier fichier CSV pour commencer
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 max-h-96 overflow-y-auto">
       {documents.map((doc) => (
-        <div
-          key={doc.id}
-          className={`
-            border rounded-lg p-4 cursor-pointer transition-all
-            ${selectedDoc === doc.id 
-              ? 'border-blue-500 bg-blue-50/50' 
-              : 'border-slate-200 hover:border-slate-300 bg-white'
-            }
-          `}
-          onClick={() => setSelectedDoc(selectedDoc === doc.id ? null : doc.id)}
-        >
-          <div className="flex items-start justify-between">
+        <div key={doc._id} className="bg-gray-50 rounded-lg p-4 border border-gray-200 hover:border-gray-300 transition-colors">
+          
+          {/* Header */}
+          <div className="flex items-start justify-between mb-3">
             <div className="flex-1 min-w-0">
-              <div className="flex items-center space-x-2">
-                <div className="w-6 h-6 bg-emerald-100 rounded flex items-center justify-center flex-shrink-0">
-                  <span className="text-xs font-bold text-emerald-600">
-                    CSV
-                  </span>
-                </div>
-                <h3 className="text-sm font-medium text-slate-900 truncate">
-                  {doc.filename}
-                </h3>
-              </div>
-              
-              <div className="mt-2 grid grid-cols-2 gap-2 text-xs text-slate-600">
-                <div>📊 {doc.rowCount} lignes</div>
-                <div>📦 {doc.chunksCount} chunks</div>
-              </div>
-              
-              <p className="text-xs text-slate-500 mt-2 line-clamp-2">
-                {doc.summary}
-              </p>
-              
-              <p className="text-xs text-slate-400 mt-2">
-                {new Date(doc.uploadedAt).toLocaleDateString('fr-FR', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit'
-                })}
+              <h4 className="text-sm font-medium text-gray-900 truncate">
+                {doc.originalName}
+              </h4>
+              <p className="text-xs text-gray-600">
+                {formatFileSize(doc.size)} • {formatDate(doc.uploadedAt)}
               </p>
             </div>
-
-            <div className="flex items-center space-x-1 ml-3">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  deleteDocument(doc.id);
-                }}
-                className="p-1 text-slate-400 hover:text-red-600 transition-colors"
-                title="Supprimer"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-              
-              <div className="w-4 h-4 flex items-center justify-center">
-                <svg 
-                  className={`w-3 h-3 text-slate-400 transition-transform ${
-                    selectedDoc === doc.id ? 'rotate-180' : ''
-                  }`} 
-                  fill="none" 
-                  stroke="currentColor" 
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </div>
-            </div>
+            
+            <span className={`
+              inline-flex items-center px-2 py-1 rounded-full text-xs font-medium
+              ${getStatusColor(doc.status)}
+            `}>
+              {getStatusText(doc.status)}
+            </span>
           </div>
 
-          {/* Details expandables */}
-          {selectedDoc === doc.id && (
-            <div className="mt-4 pt-4 border-t border-slate-200 space-y-3">
-              <div>
-                <p className="text-xs font-medium text-slate-700 mb-1">
-                  ID du document :
-                </p>
-                <p className="text-xs text-slate-500 font-mono bg-slate-100 px-2 py-1 rounded">
-                  {doc.id}
-                </p>
-              </div>
-              
-              <div>
-                <p className="text-xs font-medium text-slate-700 mb-1">
-                  Résumé complet :
-                </p>
-                <p className="text-xs text-slate-600">
-                  {doc.summary}
-                </p>
-              </div>
+          {/* Summary */}
+          {doc.summary && (
+            <p className="text-xs text-gray-600 mb-3 line-clamp-2">
+              {doc.summary}
+            </p>
+          )}
 
-              <div className="flex space-x-2">
-                <button 
-                  className="text-xs bg-blue-100 hover:bg-blue-200 text-blue-700 px-3 py-1 rounded transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    // TODO: Réanalyser le document
-                  }}
-                >
-                  Réanalyser
-                </button>
-                <button 
-                  className="text-xs bg-emerald-100 hover:bg-emerald-200 text-emerald-700 px-3 py-1 rounded transition-colors"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    // TODO: Exporter les résultats
-                  }}
-                >
-                  Exporter
-                </button>
+          {/* Stats */}
+          {doc.status === 'completed' && (
+            <div className="flex items-center space-x-4 text-xs text-gray-500">
+              {doc.chunksCount && (
+                <div className="flex items-center space-x-1">
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path d="M3 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm0 4a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z" />
+                  </svg>
+                  <span>{doc.chunksCount} chunks</span>
+                </div>
+              )}
+              
+              {doc.processing?.tokensUsed && (
+                <div className="flex items-center space-x-1">
+                  <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20">
+                    <path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" />
+                  </svg>
+                  <span>{doc.processing.tokensUsed} tokens</span>
+                </div>
+              )}
+              
+              <div className="flex items-center space-x-1">
+                <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+                <span>Prêt pour l'IA</span>
               </div>
+            </div>
+          )}
+
+          {/* Actions */}
+          {doc.status === 'completed' && (
+            <div className="mt-3 pt-3 border-t border-gray-200">
+              <button className="text-xs text-orange-600 hover:text-orange-700 font-medium">
+                Poser une question sur ce fichier →
+              </button>
             </div>
           )}
         </div>
       ))}
       
-      <button
+      {/* Refresh Button */}
+      <button 
         onClick={fetchDocuments}
-        className="w-full py-2 text-xs text-slate-500 hover:text-slate-700 transition-colors"
+        className="w-full py-2 text-sm text-gray-600 hover:text-gray-800 border border-dashed border-gray-300 rounded-lg hover:border-gray-400 transition-colors"
       >
-        🔄 Actualiser la liste
+        🔄 Actualiser
       </button>
     </div>
   );

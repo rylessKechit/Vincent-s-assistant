@@ -25,7 +25,7 @@ export function ChatSection() {
     {
       id: 'welcome',
       type: 'system',
-      content: 'Bonjour ! Je suis votre assistant IA pour l\'analyse de données SIXT. Uploadez un fichier CSV puis posez-moi des questions sur vos données !',
+      content: '👋 Salut ! Je suis ton assistant IA pour analyser tes données SIXT. Upload un fichier CSV et pose-moi tes questions !',
       timestamp: new Date()
     }
   ]);
@@ -43,7 +43,6 @@ export function ChatSection() {
   }, [messages]);
 
   useEffect(() => {
-    // Charger les documents disponibles
     fetchDocuments();
   }, []);
 
@@ -60,7 +59,7 @@ export function ChatSection() {
             {
               id: `docs-${Date.now()}`,
               type: 'system',
-              content: `📊 J'ai trouvé ${data.documents.length} document(s) analysé(s) : ${data.documents.map((d: any) => d.filename).join(', ')}. Vous pouvez maintenant me poser des questions !`,
+              content: `📊 J'ai trouvé ${data.documents.length} fichier(s) : ${data.documents.map((d: any) => d.filename).join(', ')}. Tu peux maintenant me poser tes questions !`,
               timestamp: new Date()
             }
           ]);
@@ -107,7 +106,7 @@ export function ChatSection() {
           sources: data.sources
         };
       } else {
-        assistantContent = `❌ Désolé, je n'ai pas pu répondre à votre question : ${data.error}`;
+        assistantContent = `❌ Désolé, je n'ai pas pu répondre : ${data.error}`;
       }
 
       const assistantMessage: Message = {
@@ -126,7 +125,7 @@ export function ChatSection() {
       const errorMessage: Message = {
         id: `error-${Date.now()}`,
         type: 'assistant',
-        content: '❌ Erreur de connexion. Vérifiez que le serveur est démarré.',
+        content: '❌ Erreur de connexion. Vérifie que le serveur est démarré.',
         timestamp: new Date()
       };
 
@@ -150,43 +149,43 @@ export function ChatSection() {
 
   const quickQuestions = [
     "Quel est le total des revenus ?",
-    "Quelle est la moyenne IRPD ?", 
-    "Qui sont les agents Exit Employee ?",
-    "Compare les performances par agent",
-    "Analyse les tendances mensuelles"
+    "Montre-moi les top performers",
+    "Qui sont les Exit Employees ?",
+    "Analyse les tendances",
+    "Compare les agences"
   ];
 
   return (
     <div className="flex flex-col h-full">
       
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 min-h-0">
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-6 space-y-4">
         {messages.map((message) => (
           <div key={message.id} className={`flex ${message.type === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`
-              max-w-[85%] rounded-xl px-4 py-3 text-sm
+              max-w-[80%] rounded-xl px-4 py-3
               ${message.type === 'user' 
-                ? 'bg-gradient-to-r from-orange-500 to-orange-600 text-white shadow-lg' 
+                ? 'bg-orange-500 text-white' 
                 : message.type === 'system'
-                ? 'bg-orange-50 border border-orange-200 text-orange-800'
-                : 'bg-slate-100 text-slate-900 border border-slate-200'
+                ? 'bg-blue-50 border border-blue-200 text-blue-800'
+                : 'bg-gray-100 text-gray-900'
               }
             `}>
-              <div className="prose prose-sm max-w-none">
-                <div className="whitespace-pre-wrap">{message.content}</div>
+              <div className="text-sm leading-relaxed">
+                {message.content}
               </div>
               
-              {/* Metadata pour les réponses */}
+              {/* Metadata */}
               {message.metadata && (
-                <div className="mt-3 pt-3 border-t border-slate-200 space-y-2">
+                <div className="mt-3 pt-3 border-t border-gray-200 space-y-2">
                   
                   {/* Stats */}
-                  <div className="flex items-center space-x-4 text-xs text-slate-600">
+                  <div className="flex items-center space-x-3 text-xs text-gray-600">
                     <span className="flex items-center space-x-1">
-                      <span className={`w-2 h-2 rounded-full ${
+                      <div className={`w-2 h-2 rounded-full ${
                         message.metadata.queryType === 'numeric' ? 'bg-orange-500' :
                         message.metadata.queryType === 'semantic' ? 'bg-blue-500' : 'bg-purple-500'
-                      }`}></span>
+                      }`}></div>
                       <span>{message.metadata.queryType}</span>
                     </span>
                     {message.metadata.confidence && (
@@ -199,21 +198,16 @@ export function ChatSection() {
                         {message.metadata.processingTimeMs}ms
                       </span>
                     )}
-                    {message.metadata.tokensUsed && (
-                      <span>
-                        {message.metadata.tokensUsed} tokens
-                      </span>
-                    )}
                   </div>
 
                   {/* Sources */}
                   {message.metadata.sources && message.metadata.sources.length > 0 && (
                     <div className="space-y-1">
-                      <p className="text-xs font-medium text-slate-700">Sources :</p>
-                      {message.metadata.sources.slice(0, 3).map((source, idx) => (
-                        <div key={idx} className="text-xs text-slate-600 bg-white rounded p-2 border">
-                          <div className="font-medium">{source.filename}</div>
-                          <div className="mt-1 opacity-75">{source.snippet}</div>
+                      <p className="text-xs font-medium text-gray-700">Sources :</p>
+                      {message.metadata.sources.slice(0, 2).map((source, idx) => (
+                        <div key={idx} className="text-xs bg-white rounded p-2 border">
+                          <div className="font-medium text-gray-800">{source.filename}</div>
+                          <div className="text-gray-600 mt-1">{source.snippet.substring(0, 100)}...</div>
                         </div>
                       ))}
                     </div>
@@ -228,13 +222,13 @@ export function ChatSection() {
           </div>
         ))}
         
-        {/* Loading indicator */}
+        {/* Loading */}
         {isLoading && (
           <div className="flex justify-start">
-            <div className="bg-slate-100 rounded-xl px-4 py-3 text-sm text-slate-600 border border-slate-200">
+            <div className="bg-gray-100 rounded-xl px-4 py-3 border">
               <div className="flex items-center space-x-2">
-                <div className="animate-spin w-4 h-4 border-2 border-orange-400 border-t-transparent rounded-full"></div>
-                <span>L'IA réfléchit...</span>
+                <div className="animate-spin w-4 h-4 border-2 border-orange-500 border-t-transparent rounded-full"></div>
+                <span className="text-sm text-gray-600">L'IA réfléchit...</span>
               </div>
             </div>
           </div>
@@ -243,17 +237,17 @@ export function ChatSection() {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Quick Questions */}
+      {/* Questions Rapides */}
       {messages.length <= 2 && documents.length > 0 && (
-        <div className="px-4 py-3 border-t border-orange-200/50 flex-shrink-0">
-          <p className="text-xs font-medium text-slate-700 mb-2">Questions rapides :</p>
+        <div className="px-6 py-4 border-t border-gray-200">
+          <p className="text-sm font-medium text-gray-700 mb-3">Questions rapides :</p>
           <div className="flex flex-wrap gap-2">
             {quickQuestions.map((question, idx) => (
               <button
                 key={idx}
                 onClick={() => sendMessage(question)}
                 disabled={isLoading}
-                className="text-xs bg-orange-50 hover:bg-orange-100 text-orange-700 px-3 py-2 rounded-lg border border-orange-200 transition-colors disabled:opacity-50"
+                className="text-sm bg-orange-50 hover:bg-orange-100 text-orange-700 px-3 py-2 rounded-lg border border-orange-200 transition-colors disabled:opacity-50"
               >
                 {question}
               </button>
@@ -262,8 +256,8 @@ export function ChatSection() {
         </div>
       )}
 
-      {/* Input Area */}
-      <div className="p-4 border-t border-orange-200/50 flex-shrink-0">
+      {/* Input */}
+      <div className="p-6 border-t border-gray-200">
         <form onSubmit={handleSubmit} className="flex space-x-3">
           <div className="flex-1">
             <textarea
@@ -271,11 +265,11 @@ export function ChatSection() {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder={documents.length > 0 
-                ? "Posez votre question sur vos données SIXT..." 
-                : "Uploadez d'abord un fichier CSV pour commencer..."
+                ? "Pose ta question sur tes données..." 
+                : "Upload d'abord un fichier CSV..."
               }
               disabled={isLoading || documents.length === 0}
-              className="w-full px-4 py-3 border border-orange-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none text-sm"
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-orange-500 focus:border-transparent resize-none"
               rows={1}
             />
           </div>
@@ -283,23 +277,23 @@ export function ChatSection() {
             type="submit"
             disabled={!inputValue.trim() || isLoading || documents.length === 0}
             className={`
-              px-4 py-3 rounded-xl font-medium text-sm transition-all flex-shrink-0
+              px-6 py-3 rounded-xl font-medium transition-all
               ${inputValue.trim() && !isLoading && documents.length > 0
-                ? 'bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white shadow-lg' 
-                : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+                ? 'bg-orange-500 hover:bg-orange-600 text-white' 
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
               }
             `}
           >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
             </svg>
           </button>
         </form>
         
-        <p className="text-xs text-slate-500 mt-2 text-center">
+        <p className="text-xs text-gray-500 mt-2 text-center">
           {documents.length > 0 
-            ? `${documents.length} document(s) analysé(s) • Appuyez sur Entrée pour envoyer`
-            : "Aucun document analysé • Uploadez un CSV pour commencer"
+            ? `${documents.length} fichier(s) analysé(s) • Appuie sur Entrée pour envoyer`
+            : "Upload un CSV pour commencer"
           }
         </p>
       </div>

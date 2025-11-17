@@ -1,11 +1,29 @@
 import { ObjectId } from 'mongodb';
 
-// Types de base - 100% compatibles avec votre projet existant
+// Types de base
 export type DocumentStatus = 'uploading' | 'processing' | 'completed' | 'error';
 export type FileType = 'csv' | 'pdf' | 'docx' | 'txt';
 export type QueryType = 'numeric' | 'semantic' | 'hybrid';
 
-// Structure d'un chunk - IDENTIQUE à votre version existante
+// ✅ NOUVEAU: Interface pour les erreurs d'embedding
+export interface EmbeddingError {
+  code: string;
+  message: string;
+  details?: any;
+}
+
+// ✅ NOUVEAU: Classe EmbeddingError pour les erreurs d'embedding
+export class EmbeddingError extends Error {
+  constructor(
+    message: string,
+    public retryable: boolean = true
+  ) {
+    super(message);
+    this.name = 'EmbeddingError';
+  }
+}
+
+// Structure d'un chunk
 export interface DocumentChunk {
   text: string;
   embedding: number[]; // 1536 dimensions pour text-embedding-ada-002
@@ -17,7 +35,18 @@ export interface DocumentChunk {
   };
 }
 
-// Agrégations pré-calculées pour CSV - IDENTIQUE à votre version existante
+// ✅ NOUVEAU: Contexte de document pour multi-agences
+export interface DocumentContext {
+  agency?: string;        // Agence (Paris, Lyon, etc.)
+  period?: string;        // Période (Week 47, Q4 2024, etc.)
+  region?: string;        // Région (France Nord, Sud, etc.)
+  notes?: string;         // Notes libres
+  tags?: string[];        // Tags personnalisés
+  createdAt?: Date;       // Date de création du contexte
+  updatedAt?: Date;       // Dernière mise à jour
+}
+
+// Agrégations pré-calculées pour CSV
 export interface CsvAggregations {
   totalRows: number;
   columns: string[];
@@ -42,45 +71,7 @@ export interface CsvAggregations {
   topValues: Record<string, Array<{ value: any; count: number }>>;
 }
 
-// 🐍 NOUVELLE interface pour l'analyse Python - Extension SANS casser l'existant
-export interface PythonAnalysisData {
-  extraction?: {
-    metadata?: {
-      shape?: { rows: number; columns: number };
-      columns?: string[];
-      file_info?: any;
-    };
-    sample_data?: {
-      head?: any[];
-      dtypes?: Record<string, string>;
-    };
-  };
-  analysis?: {
-    basic_stats?: Record<string, any>;
-    correlations?: Record<string, any>;
-    business_patterns?: {
-      exit_employees?: { count: number };
-      performance_segments?: {
-        high_performers?: { count: number };
-      };
-      financial_metrics?: Record<string, any>;
-    };
-  };
-  quality?: {
-    overall_score?: number;
-    completeness?: number;
-    estimated?: boolean;
-  };
-  recommendations?: string[];
-  insights?: any;
-  performance?: {
-    extraction_time: number;
-    analysis_time: number;
-    total_time: number;
-  };
-}
-
-// ✅ Document interface - EXTENSION RÉTROCOMPATIBLE de votre interface existante
+// Document principal dans MongoDB
 export interface Document {
   _id: ObjectId;
   filename: string;
@@ -91,18 +82,31 @@ export interface Document {
   processedAt?: Date;
   status: DocumentStatus;
   
-  // Contenu analysé - IDENTIQUE à votre version
+  // Contenu analysé
   summary: string;
   keyFacts: string[];
   chunks: DocumentChunk[];
   
-  // Agrégations (uniquement pour CSV) - IDENTIQUE à votre version
+  // ✅ NOUVEAU: Contexte multi-agences
+  context?: DocumentContext;
+  
+  // Agrégations (uniquement pour CSV)
   aggregations?: CsvAggregations;
   
-  // 🐍 NOUVELLE propriété - OPTIONNELLE pour ne pas casser l'existant
-  pythonAnalysis?: PythonAnalysisData;
+  // ✅ NOUVEAU: Analyse Python complète
+  pythonAnalysis?: {
+    extraction: any;
+    analysis: any;
+    insights: any;
+    recommendations: string[];
+    performance: {
+      extraction_time: number;
+      analysis_time: number;
+      total_time: number;
+    };
+  };
   
-  // Métadonnées de traitement - IDENTIQUE à votre version
+  // Métadonnées de traitement
   processing: {
     chunksCount: number;
     embeddingModel: string;
@@ -110,7 +114,15 @@ export interface Document {
     processingTimeMs: number;
   };
   
-  // Gestion d'erreurs - IDENTIQUE à votre version
+  // ✅ NOUVEAU: Historique des versions (pour mise à jour intelligente)
+  versions?: Array<{
+    version: string;
+    createdAt: Date;
+    changes: string[];
+    previousData?: any;
+  }>;
+  
+  // Gestion d'erreurs
   error?: {
     message: string;
     stack?: string;
@@ -118,7 +130,17 @@ export interface Document {
   };
 }
 
-// Conversation et messages - IDENTIQUE à votre version existante
+// ✅ NOUVEAU: Interface pour les actions de similarité
+export interface SimilarityAction {
+  type: 'update' | 'new_context' | 'separate';
+  label: string;
+  description: string;
+  recommended: boolean;
+  targetDocumentId?: string;
+  newContext?: DocumentContext;
+}
+
+// Conversation et messages
 export interface ChatMessage {
   _id: ObjectId;
   role: 'user' | 'assistant';
@@ -132,6 +154,8 @@ export interface ChatMessage {
     chunkIndex: number;
     relevanceScore: number;
     snippet: string;
+    // ✅ NOUVEAU: Contexte dans les sources
+    context?: DocumentContext;
   }>;
   
   // Métadonnées de la requête
@@ -139,85 +163,67 @@ export interface ChatMessage {
     queryType: QueryType;
     processingTimeMs: number;
     tokensUsed: number;
-    confidence?: number;
-    pythonInsights?: any; // 🐍 Optionnel pour compatibilité
+    // ✅ NOUVEAU: Filtres de contexte utilisés
+    contextFilters?: {
+      agencies?: string[];
+      periods?: string[];
+      regions?: string[];
+    };
   };
 }
 
-// Conversation - Conserve votre structure existante
 export interface Conversation {
   _id: ObjectId;
   title: string;
+  messages: ChatMessage[];
   createdAt: Date;
   updatedAt: Date;
-  messages: ChatMessage[];
   
-  // Documents liés à cette conversation
-  documentIds: ObjectId[];
+  // ✅ NOUVEAU: Contexte par défaut de la conversation
+  defaultContext?: {
+    agencies?: string[];
+    periods?: string[];
+    includeAllAgencies?: boolean;
+  };
   
   // Statistiques
   stats: {
     messageCount: number;
-    totalTokensUsed: number;
-    avgResponseTime: number;
+    documentsReferenced: ObjectId[];
+    // ✅ NOUVEAU: Agences/contextes référencés
+    contextsCovered: {
+      agencies: string[];
+      periods: string[];
+      totalDocuments: number;
+    };
   };
 }
 
-// Classes d'erreur personnalisées - IDENTIQUES à votre version
-export class ProcessingError extends Error {
-  constructor(
-    message: string,
-    public stage: string,
-    public details?: any
-  ) {
-    super(message);
-    this.name = 'ProcessingError';
-  }
-}
-
-export class ValidationError extends Error {
-  constructor(
-    message: string,
-    public field: string,
-    public value?: any
-  ) {
-    super(message);
-    this.name = 'ValidationError';
-  }
-}
-
-export class EmbeddingError extends Error {
-  constructor(
-    message: string,
-    public retryable: boolean = true
-  ) {
-    super(message);
-    this.name = 'EmbeddingError';
-  }
-}
-
-// Types d'export pour les API - Nouveaux mais compatibles
-export type CreateDocumentDTO = Omit<Document, '_id' | 'uploadedAt' | 'processedAt'>;
-export type UpdateDocumentDTO = Partial<Pick<Document, 'status' | 'summary' | 'keyFacts' | 'chunks' | 'aggregations' | 'pythonAnalysis'>>;
-
-// Types pour les réponses d'API
-export interface ApiResponse<T = any> {
-  success: boolean;
-  data?: T;
-  error?: string;
-  metadata?: {
-    timestamp: Date;
-    processingTimeMs: number;
-    tokensUsed?: number;
+// ✅ NOUVEAU: Interface pour les filtres multi-agences
+export interface ContextFilter {
+  agencies?: string[];
+  periods?: string[];
+  regions?: string[];
+  tags?: string[];
+  dateRange?: {
+    from: Date;
+    to: Date;
   };
 }
 
-// Types pour les résultats de recherche
-export interface SearchResult {
-  documentId: ObjectId;
-  filename: string;
-  relevanceScore: number;
-  snippet: string;
-  chunkIndex: number;
-  metadata?: Record<string, any>;
+// ✅ NOUVEAU: Interface pour les comparaisons inter-agences
+export interface AgencyComparison {
+  agencies: Array<{
+    name: string;
+    documentCount: number;
+    latestUpdate: Date;
+    performance?: {
+      totalRevenue?: number;
+      agentCount?: number;
+      averagePerformance?: number;
+    };
+  }>;
+  crossAgencyInsights: string[];
+  recommendations: string[];
+  generatedAt: Date;
 }

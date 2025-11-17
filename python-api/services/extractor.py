@@ -1,565 +1,495 @@
 """
-Service d'extraction de données CSV universel
-Gère automatiquement tous types de CSV avec détection intelligente
+Service d'extraction CSV avancé avec Pandas - Version RENFORCÉE
+Parsing intelligent, détection automatique et validation stricte
 """
 
 import pandas as pd
 import numpy as np
 import io
-import csv
-import re
 from typing import Dict, Any, List, Optional, Tuple
 from loguru import logger
 import chardet
-from pathlib import Path
+import json
 
 class CSVExtractor:
-    """Extracteur CSV universel - compatible tous types de fichiers"""
+    """Extracteur CSV intelligent avec validation renforcée"""
     
     def __init__(self):
         self.ready = True
-        # Patterns pour détecter différents formats
-        self.date_patterns = [
-            r'\d{4}-\d{2}-\d{2}',  # 2023-01-01
-            r'\d{2}/\d{2}/\d{4}',  # 01/01/2023
-            r'\d{2}\.\d{2}\.\d{4}', # 01.01.2023
-            r'\d{2}-\d{2}-\d{4}',  # 01-01-2023
-        ]
+        self.max_detection_lines = 10  # Lignes pour détection automatique
+        self.supported_encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
         
-        # Valeurs considérées comme manquantes
-        self.na_values = [
-            '', 'nan', 'NaN', 'null', 'NULL', 'None', 'NONE',
-            '-', '/', ' ', 'N/A', 'n/a', 'NA', 'na',
-            '#N/A', '#NULL!', '#VALUE!', '#DIV/0!', '#NAME?',
-            'undefined', 'UNDEFINED', '?', '??', '???'
-        ]
+        logger.info("🔧 CSVExtractor initialisé")
     
     def is_ready(self) -> bool:
         return self.ready
     
     async def extract_csv(self, content: bytes, filename: str) -> Dict[str, Any]:
         """
-        Extraction CSV universelle - compatible tous types de fichiers
+        Extraction avancée d'un CSV avec validation stricte
         
         Args:
-            content: Contenu du fichier en bytes
+            content: Contenu binaire du fichier
             filename: Nom du fichier
-            
-        Returns:
-            Dict avec les données extraites et métadonnées
-        """
         
+        Returns:
+            Dict contenant:
+            - success: bool
+            - dataframe_data: Données sérialisables
+            - metadata: Métadonnées d'extraction
+            - column_types: Types détectés
+            - sample_data: Échantillon
+            - error: Message d'erreur si échec
+        """
         try:
-            logger.info(f"🔍 Début extraction universelle: {filename}")
+            logger.info(f"🚀 Début extraction CSV: {filename}")
             
-            # 1. Détection de l'encodage
-            encoding = self._detect_encoding(content)
-            logger.info(f"📝 Encodage détecté: {encoding}")
+            # ÉTAPE 1: Validation du contenu
+            if not content or len(content) == 0:
+                raise ValueError("Contenu de fichier vide")
             
-            # 2. Décodage du contenu
-            text_content = content.decode(encoding)
+            if len(content) < 10:
+                raise ValueError("Fichier trop petit pour être un CSV valide")
             
-            # 3. Détection du séparateur et des paramètres CSV
-            csv_params = self._detect_csv_parameters(text_content)
-            logger.info(f"⚙️ Paramètres CSV: {csv_params}")
+            # ÉTAPE 2: Détection d'encodage robuste
+            encoding = self._detect_encoding_robust(content)
+            logger.info(f"✅ Encodage détecté: {encoding}")
             
-            # 4. Lecture du CSV avec paramètres optimaux
-            df = self._read_csv_smart(content, encoding, csv_params)
-            logger.info(f"📊 DataFrame créé: {df.shape[0]} lignes, {df.shape[1]} colonnes")
+            # ÉTAPE 3: Conversion en string avec gestion d'erreurs
+            try:
+                csv_string = content.decode(encoding)
+            except UnicodeDecodeError as e:
+                logger.warning(f"Erreur décodage {encoding}, essai avec 'latin1'")
+                csv_string = content.decode('latin1', errors='replace')
+                encoding = 'latin1'
             
-            # 5. Nettoyage et normalisation
-            df = self._clean_and_normalize_dataframe(df)
-            logger.info(f"🧹 DataFrame nettoyé: {df.shape[0]} lignes, {df.shape[1]} colonnes")
+            # ÉTAPE 4: Validation du contenu CSV
+            self._validate_csv_content(csv_string)
             
-            # 6. Détection et conversion automatique des types
-            df, type_info = self._auto_detect_and_convert_types(df)
-            logger.info(f"🔄 Types détectés: {len(type_info)} colonnes")
+            # ÉTAPE 5: Détection automatique du séparateur
+            separator = self._detect_separator_robust(csv_string)
+            logger.info(f"✅ Séparateur détecté: '{separator}'")
             
-            # 7. Gestion intelligente des valeurs manquantes
-            df = self._handle_missing_values_smart(df)
+            # ÉTAPE 6: Parsing Pandas avec gestion d'erreurs
+            df = self._parse_with_pandas(csv_string, separator, encoding)
             
-            # 8. Génération des métadonnées enrichies
-            metadata = self._generate_rich_metadata(df, filename, encoding, csv_params, type_info)
+            # ÉTAPE 7: Validation du DataFrame
+            self._validate_dataframe(df)
             
-            # 9. Préparation des données pour JSON
-            dataframe_data = self._prepare_dataframe_for_json(df)
+            logger.info(f"✅ DataFrame créé: {df.shape[0]} lignes × {df.shape[1]} colonnes")
             
-            # 10. Échantillon de données pour vérification
-            sample_data = self._generate_sample_data(df)
+            # ÉTAPE 8: Nettoyage et optimisation
+            df_cleaned = self._clean_dataframe(df)
             
-            logger.info(f"✅ Extraction réussie - {metadata['shape']['rows']} lignes analysées")
+            # ÉTAPE 9: Détection intelligente des types
+            column_types = self._detect_column_types_robust(df_cleaned)
+            
+            # ÉTAPE 10: Optimisation des types pour performance
+            df_optimized = self._optimize_dtypes_safe(df_cleaned, column_types)
+            
+            # ÉTAPE 11: Génération des métadonnées
+            metadata = self._generate_metadata_robust(df_optimized, filename, encoding, separator)
+            
+            # ÉTAPE 12: Échantillon pour preview
+            sample_data = self._generate_sample_safe(df_optimized)
+            
+            # ÉTAPE 13: Sérialisation sécurisée
+            dataframe_data = self._serialize_dataframe_safe(df_optimized)
+            
+            # ÉTAPE 14: Validation finale
+            self._validate_final_result(dataframe_data, metadata, sample_data)
+            
+            logger.success(f"🎉 Extraction CSV réussie pour {filename}")
             
             return {
-                'success': True,
-                'dataframe_data': dataframe_data,
-                'metadata': metadata,
-                'sample_data': sample_data,
-                'extraction_info': {
-                    'encoding': encoding,
-                    'csv_params': csv_params,
-                    'type_conversions': type_info,
-                    'data_quality': self._assess_data_quality(df)
-                }
+                "success": True,
+                "dataframe_data": dataframe_data,
+                "metadata": metadata,
+                "column_types": column_types,
+                "sample_data": sample_data,
+                "error": None
             }
             
         except Exception as e:
-            logger.error(f"❌ Erreur extraction CSV: {str(e)}")
+            error_msg = f"Erreur extraction CSV {filename}: {str(e)}"
+            logger.error(f"❌ {error_msg}")
+            
             return {
-                'success': False,
-                'error': f"Erreur extraction: {str(e)}",
-                'filename': filename
+                "success": False,
+                "dataframe_data": {},
+                "metadata": {},
+                "column_types": {},
+                "sample_data": {},
+                "error": error_msg
             }
     
-    def _detect_encoding(self, content: bytes) -> str:
-        """Détection intelligente de l'encodage"""
+    def _detect_encoding_robust(self, content: bytes) -> str:
+        """Détection d'encodage robuste avec fallbacks"""
         try:
-            # Détecter l'encodage avec chardet
-            detection = chardet.detect(content)
-            encoding = detection.get('encoding', 'utf-8')
-            confidence = detection.get('confidence', 0)
+            # Essayer chardet d'abord
+            detection = chardet.detect(content[:10000])  # Premier 10KB
+            if detection and detection.get('encoding'):
+                encoding = detection['encoding']
+                confidence = detection.get('confidence', 0)
+                
+                if confidence > 0.7:
+                    logger.info(f"Encodage chardet: {encoding} (confidence: {confidence:.2f})")
+                    return encoding
             
-            # Fallback si confiance faible
-            if confidence < 0.7:
-                # Tester les encodages courants
-                for test_encoding in ['utf-8', 'iso-8859-1', 'cp1252', 'utf-16']:
-                    try:
-                        content.decode(test_encoding)
-                        return test_encoding
-                    except:
-                        continue
+            # Fallback: essayer les encodages courants
+            for encoding in self.supported_encodings:
+                try:
+                    content.decode(encoding)
+                    logger.info(f"Encodage fallback trouvé: {encoding}")
+                    return encoding
+                except UnicodeDecodeError:
+                    continue
             
-            return encoding.lower()
-        except:
+            # Dernier recours
+            logger.warning("Utilisation encodage par défaut: utf-8")
+            return 'utf-8'
+            
+        except Exception as e:
+            logger.error(f"Erreur détection encodage: {str(e)}")
             return 'utf-8'
     
-    def _detect_csv_parameters(self, text_content: str) -> Dict[str, Any]:
-        """Détection automatique des paramètres CSV"""
+    def _validate_csv_content(self, csv_string: str) -> None:
+        """Validation du contenu CSV"""
+        if not csv_string or csv_string.strip() == '':
+            raise ValueError("Contenu CSV vide après décodage")
         
-        # Prendre un échantillon pour l'analyse
-        sample = '\n'.join(text_content.split('\n')[:10])
+        lines = csv_string.strip().split('\n')
+        if len(lines) < 2:
+            raise ValueError("CSV doit avoir au moins un header et une ligne de données")
         
-        params = {
-            'delimiter': ',',
-            'quotechar': '"',
-            'quoting': csv.QUOTE_MINIMAL,
-            'skipinitialspace': True
-        }
+        # Vérifier qu'il y a des séparateurs potentiels
+        potential_seps = [',', ';', '\t', '|']
+        has_separator = any(sep in csv_string[:1000] for sep in potential_seps)
         
-        try:
-            # Utiliser csv.Sniffer pour détecter le dialecte
-            sniffer = csv.Sniffer()
-            dialect = sniffer.sniff(sample, delimiters=',;\t|')
-            
-            params['delimiter'] = dialect.delimiter
-            params['quotechar'] = dialect.quotechar
-            params['quoting'] = dialect.quoting
-            
-        except Exception as e:
-            logger.warning(f"Sniffer failed, using defaults: {e}")
-            
-            # Détection manuelle du délimiteur
-            delimiters = [',', ';', '\t', '|']
-            delimiter_counts = {}
-            
-            for delim in delimiters:
-                count = sample.count(delim)
-                if count > 0:
-                    delimiter_counts[delim] = count
-            
-            if delimiter_counts:
-                params['delimiter'] = max(delimiter_counts.items(), key=lambda x: x[1])[0]
-        
-        return params
+        if not has_separator:
+            raise ValueError("Aucun séparateur CSV standard détecté")
     
-    def _read_csv_smart(self, content: bytes, encoding: str, csv_params: Dict[str, Any]) -> pd.DataFrame:
-        """Lecture CSV intelligente avec gestion d'erreurs"""
+    def _detect_separator_robust(self, csv_string: str) -> str:
+        """Détection robuste du séparateur CSV"""
+        lines = csv_string.split('\n')[:self.max_detection_lines]
+        valid_lines = [line.strip() for line in lines if line.strip()]
         
+        if not valid_lines:
+            raise ValueError("Aucune ligne valide trouvée pour détection séparateur")
+        
+        separators = [',', ';', '\t', '|']
+        scores = {}
+        
+        for sep in separators:
+            scores[sep] = 0
+            columns_counts = []
+            
+            for line in valid_lines:
+                if line:
+                    parts = line.split(sep)
+                    if len(parts) > 1:
+                        scores[sep] += len(parts)
+                        columns_counts.append(len(parts))
+            
+            # Bonus si nombre de colonnes cohérent
+            if columns_counts and len(set(columns_counts)) <= 2:  # Max 2 tailles différentes
+                scores[sep] *= 2
+        
+        if not scores or max(scores.values()) == 0:
+            logger.warning("Aucun séparateur détecté, utilisation de ','")
+            return ','
+        
+        best_sep = max(scores, key=scores.get)
+        logger.info(f"Meilleur séparateur: '{best_sep}' (score: {scores[best_sep]})")
+        
+        return best_sep
+    
+    def _parse_with_pandas(self, csv_string: str, separator: str, encoding: str) -> pd.DataFrame:
+        """Parsing Pandas avec gestion d'erreurs robuste"""
         try:
-            # Première tentative avec les paramètres détectés
-            df = pd.read_csv(
-                io.BytesIO(content),
-                encoding=encoding,
-                delimiter=csv_params['delimiter'],
-                quotechar=csv_params['quotechar'],
-                na_values=self.na_values,
-                keep_default_na=True,
-                dtype=str,  # Tout en string pour commencer
-                skipinitialspace=csv_params.get('skipinitialspace', True),
-                on_bad_lines='warn'
-            )
+            # Configuration de base
+            parse_config = {
+                'sep': separator,
+                'encoding': encoding,
+                'low_memory': False,
+                'na_values': ['', ' ', 'NA', 'N/A', 'NULL', 'null', '-', 'Exit Employee'],
+                'keep_default_na': True,
+                'skip_blank_lines': True
+            }
+            
+            # Première tentative
+            df = pd.read_csv(io.StringIO(csv_string), **parse_config)
             
             return df
             
-        except Exception as e:
-            logger.warning(f"Lecture CSV échouée avec paramètres détectés: {e}")
+        except pd.errors.EmptyDataError:
+            raise ValueError("Fichier CSV vide")
+        
+        except pd.errors.ParserError as e:
+            logger.warning(f"Erreur parsing CSV, tentative avec engine python: {str(e)}")
             
-            # Fallback avec paramètres par défaut
+            # Deuxième tentative avec engine python
             try:
-                df = pd.read_csv(
-                    io.BytesIO(content),
-                    encoding=encoding,
-                    delimiter=',',
-                    na_values=self.na_values,
-                    keep_default_na=True,
-                    dtype=str,
-                    on_bad_lines='skip'
-                )
+                parse_config['engine'] = 'python'
+                df = pd.read_csv(io.StringIO(csv_string), **parse_config)
                 return df
             except Exception as e2:
-                logger.error(f"Lecture CSV fallback échouée: {e2}")
-                raise e2
+                raise ValueError(f"Impossible de parser le CSV: {str(e2)}")
+        
+        except Exception as e:
+            raise ValueError(f"Erreur lecture CSV: {str(e)}")
     
-    def _clean_and_normalize_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Nettoyage et normalisation du DataFrame"""
+    def _validate_dataframe(self, df: pd.DataFrame) -> None:
+        """Validation du DataFrame créé"""
+        if df is None:
+            raise ValueError("DataFrame est None")
         
-        # 1. Nettoyer les noms de colonnes
-        df.columns = df.columns.str.strip()  # Supprimer les espaces
-        df.columns = df.columns.str.replace('"', '')  # Supprimer les guillemets
-        df.columns = df.columns.str.replace('\n', ' ')  # Remplacer retours à la ligne
+        if df.empty:
+            raise ValueError("DataFrame est vide")
         
-        # 2. Supprimer les lignes complètement vides
-        df = df.dropna(how='all')
+        if len(df.columns) == 0:
+            raise ValueError("DataFrame n'a aucune colonne")
         
-        # 3. Supprimer les colonnes complètement vides
-        df = df.dropna(axis=1, how='all')
+        if len(df) == 0:
+            raise ValueError("DataFrame n'a aucune ligne")
         
-        # 4. Nettoyer les valeurs string
+        logger.success(f"✅ DataFrame validé: {df.shape}")
+    
+    def _clean_dataframe(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Nettoyage intelligent du DataFrame"""
+        try:
+            # Copie pour ne pas modifier l'original
+            df_clean = df.copy()
+            
+            # Nettoyer les noms de colonnes
+            df_clean.columns = [
+                str(col).strip().replace('\n', ' ').replace('\r', '')
+                for col in df_clean.columns
+            ]
+            
+            # Supprimer les colonnes entièrement vides
+            df_clean = df_clean.dropna(axis=1, how='all')
+            
+            # Supprimer les lignes entièrement vides
+            df_clean = df_clean.dropna(axis=0, how='all')
+            
+            # Reset index
+            df_clean = df_clean.reset_index(drop=True)
+            
+            logger.info(f"DataFrame nettoyé: {df_clean.shape}")
+            return df_clean
+            
+        except Exception as e:
+            logger.error(f"Erreur nettoyage DataFrame: {str(e)}")
+            return df
+    
+    def _detect_column_types_robust(self, df: pd.DataFrame) -> Dict[str, str]:
+        """Détection robuste des types de colonnes"""
+        column_types = {}
+        
         for col in df.columns:
-            if df[col].dtype == 'object':
-                df[col] = df[col].astype(str).str.strip()
-                df[col] = df[col].replace('nan', np.nan)
-        
-        # 5. Réinitialiser l'index
-        df = df.reset_index(drop=True)
-        
-        return df
-    
-    def _auto_detect_and_convert_types(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Dict]]:
-        """Détection automatique et conversion des types de données"""
-        
-        type_info = {}
-        df_converted = df.copy()
-        
-        for col in df.columns:
-            col_info = {
-                'original_type': 'string',
-                'detected_type': 'string',
-                'conversion_success': False,
-                'special_format': None
-            }
-            
-            # Échantillon non-null pour analyse
-            sample = df[col].dropna()
-            if len(sample) == 0:
-                type_info[col] = col_info
-                continue
-                
-            # 1. Détecter les pourcentages
-            if self._is_percentage_column(sample):
-                col_info['detected_type'] = 'percentage'
-                col_info['special_format'] = 'percentage'
-                # Garder en string mais marquer comme pourcentage
-                
-            # 2. Détecter les monnaies
-            elif self._is_currency_column(sample):
-                col_info['detected_type'] = 'currency'
-                col_info['special_format'] = 'currency'
-                # Convertir en numérique
-                df_converted[col] = self._convert_currency_to_numeric(df[col])
-                col_info['conversion_success'] = True
-                
-            # 3. Détecter les nombres
-            elif self._is_numeric_column(sample):
-                col_info['detected_type'] = 'numeric'
-                try:
-                    df_converted[col] = pd.to_numeric(df[col], errors='coerce')
-                    col_info['conversion_success'] = True
-                except:
-                    pass
-                    
-            # 4. Détecter les dates
-            elif self._is_date_column(sample):
-                col_info['detected_type'] = 'datetime'
-                try:
-                    df_converted[col] = pd.to_datetime(df[col], errors='coerce')
-                    col_info['conversion_success'] = True
-                except:
-                    pass
-                    
-            # 5. Détecter les booléens
-            elif self._is_boolean_column(sample):
-                col_info['detected_type'] = 'boolean'
-                try:
-                    df_converted[col] = df[col].map({'True': True, 'False': False, '1': True, '0': False})
-                    col_info['conversion_success'] = True
-                except:
-                    pass
-            
-            # 6. Reste en string
-            else:
-                col_info['detected_type'] = 'string'
-                # Détecter des formats spéciaux
-                if self._is_identifier_column(sample):
-                    col_info['special_format'] = 'identifier'
-                elif self._is_category_column(sample):
-                    col_info['special_format'] = 'category'
-            
-            type_info[col] = col_info
-        
-        return df_converted, type_info
-    
-    def _is_percentage_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne contient des pourcentages"""
-        sample_str = series.astype(str).str.lower()
-        percent_count = sample_str.str.contains('%|percent|pct').sum()
-        return percent_count / len(series) > 0.5
-    
-    def _is_currency_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne contient des montants"""
-        sample_str = series.astype(str)
-        currency_pattern = r'[$€£¥]|USD|EUR|CHF|GBP'
-        currency_count = sample_str.str.contains(currency_pattern, case=False).sum()
-        return currency_count / len(series) > 0.3
-    
-    def _is_numeric_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne est numérique"""
-        numeric_count = 0
-        for val in series.head(min(100, len(series))):
             try:
-                # Nettoyer et tester conversion
-                cleaned = str(val).replace(',', '').replace(' ', '').replace('€', '').replace('$', '')
-                float(cleaned)
-                numeric_count += 1
-            except:
-                pass
+                series = df[col].dropna()
+                
+                if len(series) == 0:
+                    column_types[col] = 'empty'
+                    continue
+                
+                # Test numérique
+                if pd.api.types.is_numeric_dtype(series):
+                    if series.dtype in ['int64', 'int32']:
+                        column_types[col] = 'integer'
+                    else:
+                        column_types[col] = 'float'
+                    continue
+                
+                # Test de conversion numérique
+                try:
+                    pd.to_numeric(series.head(100))
+                    column_types[col] = 'numeric'
+                    continue
+                except:
+                    pass
+                
+                # Test datetime
+                try:
+                    pd.to_datetime(series.head(10))
+                    column_types[col] = 'datetime'
+                    continue
+                except:
+                    pass
+                
+                # Test boolean
+                unique_vals = series.unique()
+                if len(unique_vals) <= 2 and all(str(v).lower() in ['true', 'false', '1', '0', 'yes', 'no'] for v in unique_vals):
+                    column_types[col] = 'boolean'
+                    continue
+                
+                # Par défaut: text
+                column_types[col] = 'text'
+                
+            except Exception as e:
+                logger.warning(f"Erreur détection type pour {col}: {str(e)}")
+                column_types[col] = 'text'
         
-        return numeric_count / min(100, len(series)) > 0.8
+        logger.info(f"Types détectés: {column_types}")
+        return column_types
     
-    def _is_date_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne contient des dates"""
-        sample_str = series.astype(str)
-        date_count = 0
-        
-        for pattern in self.date_patterns:
-            date_count += sample_str.str.contains(pattern).sum()
-        
-        return date_count / len(series) > 0.7
-    
-    def _is_boolean_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne contient des booléens"""
-        sample_str = series.astype(str).str.lower()
-        bool_values = {'true', 'false', '1', '0', 'yes', 'no', 'y', 'n', 'oui', 'non'}
-        bool_count = sample_str.isin(bool_values).sum()
-        return bool_count / len(series) > 0.8
-    
-    def _is_identifier_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne contient des identifiants"""
-        # Vérifie si c'est majoritairement unique et contient des patterns d'ID
-        uniqueness = series.nunique() / len(series)
-        sample_str = series.astype(str)
-        
-        id_patterns = [r'\d{3,}', r'[A-Z]{2,}\d+', r'\d+[A-Z]+', r'[A-Z]+\d+[A-Z]+']
-        pattern_matches = sum(sample_str.str.contains(pattern).any() for pattern in id_patterns)
-        
-        return uniqueness > 0.9 or pattern_matches >= 2
-    
-    def _is_category_column(self, series: pd.Series) -> bool:
-        """Détecte si une colonne est catégorielle"""
-        unique_ratio = series.nunique() / len(series)
-        return unique_ratio < 0.5 and series.nunique() < 50
-    
-    def _convert_currency_to_numeric(self, series: pd.Series) -> pd.Series:
-        """Convertit une série de montants en numérique"""
-        return series.astype(str).str.replace(r'[$€£¥,]', '', regex=True).str.replace(' ', '').apply(
-            lambda x: pd.to_numeric(x, errors='coerce')
-        )
-    
-    def _handle_missing_values_smart(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Gestion intelligente des valeurs manquantes"""
-        
-        df_handled = df.copy()
-        
-        for col in df.columns:
-            missing_count = df[col].isnull().sum()
-            total_count = len(df)
-            missing_ratio = missing_count / total_count
+    def _optimize_dtypes_safe(self, df: pd.DataFrame, column_types: Dict[str, str]) -> pd.DataFrame:
+        """Optimisation sécurisée des types DataFrame"""
+        try:
+            df_opt = df.copy()
             
-            # Si plus de 90% de valeurs manquantes, marquer la colonne
-            if missing_ratio > 0.9:
-                logger.warning(f"Colonne '{col}' a {missing_ratio:.1%} de valeurs manquantes")
-                continue
+            for col, col_type in column_types.items():
+                if col not in df_opt.columns:
+                    continue
+                
+                try:
+                    if col_type == 'integer':
+                        df_opt[col] = pd.to_numeric(df_opt[col], errors='coerce').astype('Int64')
+                    elif col_type == 'float' or col_type == 'numeric':
+                        df_opt[col] = pd.to_numeric(df_opt[col], errors='coerce')
+                    elif col_type == 'datetime':
+                        df_opt[col] = pd.to_datetime(df_opt[col], errors='coerce')
+                    elif col_type == 'boolean':
+                        df_opt[col] = df_opt[col].astype('boolean')
+                    else:
+                        df_opt[col] = df_opt[col].astype('string')
+                        
+                except Exception as e:
+                    logger.warning(f"Impossible d'optimiser type pour {col}: {str(e)}")
             
-            # Détecter le type de colonne pour le remplissage intelligent
-            col_lower = col.lower()
+            return df_opt
             
-            # Identifiants : remplacer par "Inconnu_N"
-            if any(keyword in col_lower for keyword in ['id', 'branch', 'agent', 'code', 'ref', 'name', 'entity']):
-                mask = df_handled[col].isnull()
-                if mask.any():
-                    df_handled.loc[mask, col] = [f"Inconnu_{col}_{i}" for i in range(mask.sum())]
-            
-            # Numérique : garder NaN (sera géré dans l'analyse)
-            elif df_handled[col].dtype in ['float64', 'int64']:
-                pass  # Garder les NaN pour l'analyse statistique
-            
-            # Catégories : remplacer par "Non spécifié"
-            elif df_handled[col].dtype == 'object':
-                df_handled[col] = df_handled[col].fillna("Non spécifié")
-        
-        return df_handled
+        except Exception as e:
+            logger.error(f"Erreur optimisation types: {str(e)}")
+            return df
     
-    def _generate_rich_metadata(self, df: pd.DataFrame, filename: str, encoding: str, 
-                              csv_params: Dict[str, Any], type_info: Dict[str, Dict]) -> Dict[str, Any]:
-        """Génération de métadonnées enrichies"""
-        
-        return {
-            'filename': filename,
-            'shape': {
-                'rows': int(len(df)),
-                'columns': int(len(df.columns))
-            },
-            'columns': df.columns.tolist(),
-            'data_types': {col: info['detected_type'] for col, info in type_info.items()},
-            'special_formats': {col: info['special_format'] for col, info in type_info.items() if info['special_format']},
-            'missing_data': {col: int(df[col].isnull().sum()) for col in df.columns},
-            'file_info': {
-                'encoding': encoding,
-                'delimiter': csv_params['delimiter'],
-                'size_bytes': None,  # Sera rempli par l'appelant
-                'estimated_size_mb': round(df.memory_usage(deep=True).sum() / 1024 / 1024, 2)
-            },
-            'column_stats': self._generate_column_stats(df),
-            'data_quality_summary': self._generate_quality_summary(df)
-        }
+    def _generate_metadata_robust(self, df: pd.DataFrame, filename: str, encoding: str, separator: str) -> Dict[str, Any]:
+        """Génération robuste des métadonnées"""
+        try:
+            return {
+                "filename": filename,
+                "encoding": encoding,
+                "separator": separator,
+                "shape": {
+                    "rows": int(len(df)),
+                    "columns": int(len(df.columns))
+                },
+                "columns": list(df.columns),
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()},
+                "memory_usage": int(df.memory_usage(deep=True).sum()),
+                "null_counts": df.isnull().sum().to_dict(),
+                "extraction_timestamp": pd.Timestamp.now().isoformat()
+            }
+        except Exception as e:
+            logger.error(f"Erreur génération métadonnées: {str(e)}")
+            return {
+                "filename": filename,
+                "encoding": encoding,
+                "separator": separator,
+                "shape": {"rows": 0, "columns": 0},
+                "columns": [],
+                "error": str(e)
+            }
     
-    def _generate_column_stats(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Statistiques par colonne"""
-        stats = {}
-        
-        for col in df.columns:
-            col_stats = {
-                'non_null_count': int(df[col].count()),
-                'null_count': int(df[col].isnull().sum()),
-                'unique_count': int(df[col].nunique()),
-                'duplicate_count': int(df[col].duplicated().sum())
+    def _generate_sample_safe(self, df: pd.DataFrame, n_rows: int = 5) -> Dict[str, Any]:
+        """Génération sécurisée d'un échantillon"""
+        try:
+            if len(df) == 0:
+                return {"head": [], "tail": [], "random": []}
+            
+            sample_size = min(n_rows, len(df))
+            
+            # Échantillon début
+            head_data = df.head(sample_size).fillna('').to_dict('records')
+            
+            # Échantillon fin (si assez de données)
+            tail_data = df.tail(sample_size).fillna('').to_dict('records') if len(df) > sample_size else []
+            
+            # Échantillon aléatoire (si assez de données)
+            random_data = df.sample(min(sample_size, len(df))).fillna('').to_dict('records') if len(df) > sample_size else []
+            
+            return {
+                "head": head_data,
+                "tail": tail_data,
+                "random": random_data
             }
             
-            if df[col].dtype in ['float64', 'int64']:
-                col_stats.update({
-                    'mean': float(df[col].mean()) if df[col].count() > 0 else None,
-                    'median': float(df[col].median()) if df[col].count() > 0 else None,
-                    'std': float(df[col].std()) if df[col].count() > 1 else None,
-                    'min': float(df[col].min()) if df[col].count() > 0 else None,
-                    'max': float(df[col].max()) if df[col].count() > 0 else None
-                })
+        except Exception as e:
+            logger.error(f"Erreur génération échantillon: {str(e)}")
+            return {"head": [], "tail": [], "random": [], "error": str(e)}
+    
+    def _serialize_dataframe_safe(self, df: pd.DataFrame) -> Dict[str, Any]:
+        """Sérialisation ultra-sécurisée du DataFrame"""
+        try:
+            # Remplacer tous les NaN/NaT par None
+            df_clean = df.copy()
             
-            stats[col] = col_stats
-        
-        return stats
+            # Gestion spéciale pour différents types
+            for col in df_clean.columns:
+                dtype_str = str(df_clean[col].dtype)
+                
+                if 'datetime' in dtype_str:
+                    # Convertir datetime en string ISO
+                    df_clean[col] = df_clean[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                elif 'Int64' in dtype_str or 'Float64' in dtype_str:
+                    # Gérer les types nullable pandas
+                    df_clean[col] = df_clean[col].astype('object')
+                
+            # Remplacer NaN par None pour JSON
+            df_clean = df_clean.replace({pd.NaT: None, np.nan: None})
+            
+            # Convertir en format sérialisable
+            result = {
+                "columns": list(df_clean.columns),
+                "data": df_clean.to_dict('records'),
+                "shape": {
+                    "rows": int(len(df_clean)), 
+                    "columns": int(len(df_clean.columns))
+                },
+                "dtypes": {col: str(dtype) for col, dtype in df.dtypes.items()}
+            }
+            
+            # Test de sérialisation JSON
+            json.dumps(result, default=str)
+            
+            logger.success("✅ Sérialisation DataFrame réussie")
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Erreur sérialisation DataFrame: {str(e)}")
+            
+            # Fallback minimal
+            return {
+                "columns": list(df.columns) if hasattr(df, 'columns') else [],
+                "data": [],
+                "shape": {"rows": 0, "columns": 0},
+                "dtypes": {},
+                "error": f"Erreur sérialisation: {str(e)}"
+            }
     
-    def _generate_quality_summary(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Résumé de la qualité des données"""
-        total_cells = df.shape[0] * df.shape[1]
-        missing_cells = df.isnull().sum().sum()
+    def _validate_final_result(self, dataframe_data: Dict[str, Any], metadata: Dict[str, Any], sample_data: Dict[str, Any]) -> None:
+        """Validation finale du résultat d'extraction"""
+        # Validation dataframe_data
+        if not dataframe_data or not isinstance(dataframe_data, dict):
+            raise ValueError("dataframe_data invalide")
         
-        return {
-            'completeness_ratio': float(1 - missing_cells / total_cells) if total_cells > 0 else 0,
-            'total_cells': int(total_cells),
-            'missing_cells': int(missing_cells),
-            'empty_rows': int(df.isnull().all(axis=1).sum()),
-            'empty_columns': int(df.isnull().all().sum()),
-            'duplicate_rows': int(df.duplicated().sum())
-        }
-    
-    def _prepare_dataframe_for_json(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Préparation du DataFrame pour sérialisation JSON"""
+        if not dataframe_data.get('columns'):
+            raise ValueError("Colonnes manquantes dans dataframe_data")
         
-        # Convertir les types pandas pour JSON
-        df_json = df.copy()
+        if not isinstance(dataframe_data.get('data'), list):
+            raise ValueError("Données manquantes dans dataframe_data")
         
-        for col in df_json.columns:
-            if df_json[col].dtype == 'datetime64[ns]':
-                df_json[col] = df_json[col].dt.strftime('%Y-%m-%d')
-            elif df_json[col].dtype in ['float64', 'int64']:
-                # Remplacer NaN par None pour JSON
-                df_json[col] = df_json[col].where(pd.notnull(df_json[col]), None)
+        # Validation metadata
+        if not metadata or not isinstance(metadata, dict):
+            raise ValueError("Metadata invalides")
         
-        return {
-            'data': df_json.to_dict('records'),
-            'columns': df.columns.tolist(),
-            'dtypes': {col: str(df[col].dtype) for col in df.columns}
-        }
-    
-    def _generate_sample_data(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Génération d'un échantillon de données"""
+        if not metadata.get('shape') or not isinstance(metadata['shape'], dict):
+            raise ValueError("Shape manquante dans metadata")
         
-        sample_size = min(5, len(df))
+        # Validation sample_data
+        if not isinstance(sample_data, dict):
+            raise ValueError("Sample_data invalides")
         
-        return {
-            'head': df.head(sample_size).to_dict('records'),
-            'tail': df.tail(sample_size).to_dict('records') if len(df) > sample_size else None,
-            'random_sample': df.sample(min(3, len(df))).to_dict('records') if len(df) > 0 else []
-        }
-    
-    def _assess_data_quality(self, df: pd.DataFrame) -> Dict[str, Any]:
-        """Évaluation de la qualité des données"""
-        
-        total_cells = df.shape[0] * df.shape[1]
-        if total_cells == 0:
-            return {'overall_score': 0, 'issues': ['DataFrame vide']}
-        
-        missing_cells = df.isnull().sum().sum()
-        completeness = 1 - (missing_cells / total_cells)
-        
-        # Calcul du score de qualité
-        quality_score = completeness * 100
-        
-        issues = []
-        if completeness < 0.9:
-            issues.append(f"Taux de complétude faible: {completeness:.1%}")
-        
-        if df.duplicated().sum() > 0:
-            issues.append(f"{df.duplicated().sum()} lignes dupliquées détectées")
-        
-        return {
-            'overall_score': round(quality_score, 1),
-            'completeness': round(completeness * 100, 1),
-            'issues': issues,
-            'recommendations': self._generate_quality_recommendations(df)
-        }
-    
-    def _generate_quality_recommendations(self, df: pd.DataFrame) -> List[str]:
-        """Recommandations pour améliorer la qualité"""
-        recommendations = []
-        
-        # Vérifier les colonnes avec beaucoup de valeurs manquantes
-        for col in df.columns:
-            missing_ratio = df[col].isnull().sum() / len(df)
-            if missing_ratio > 0.5:
-                recommendations.append(f"Colonne '{col}': {missing_ratio:.1%} de valeurs manquantes - Vérifier la source")
-        
-        # Vérifier les doublons
-        if df.duplicated().sum() > 0:
-            recommendations.append("Supprimer ou investiguer les lignes dupliquées")
-        
-        # Vérifier la cohérence des types
-        for col in df.columns:
-            if df[col].dtype == 'object':
-                sample = df[col].dropna().astype(str)
-                if len(sample) > 0:
-                    mixed_types = False
-                    numeric_count = 0
-                    for val in sample.head(20):
-                        try:
-                            float(str(val).replace(',', ''))
-                            numeric_count += 1
-                        except:
-                            pass
-                    
-                    if 0.3 < numeric_count / len(sample.head(20)) < 0.9:
-                        recommendations.append(f"Colonne '{col}': Types de données mixtes détectés")
-        
-        if not recommendations:
-            recommendations.append("Qualité des données satisfaisante")
-        
-        return recommendations
+        logger.success("✅ Validation finale réussie")

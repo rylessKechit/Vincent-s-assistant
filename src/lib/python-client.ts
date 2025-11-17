@@ -1,17 +1,12 @@
 /**
- * Client pour l'API Python depuis Next.js
- * Orchestration des appels entre Next.js et FastAPI
+ * Client Python - VERSION VERCEL COMPATIBLE
+ * Traitement DIRECT des fichiers sans stockage local
  */
 
-interface PythonAnalysisResult {
+// Types pour les réponses Python
+interface PythonExtractionResult {
   success: boolean;
-  data: {
-    extraction: any;
-    analysis: any;
-    quality: any;
-    business_patterns: any;
-    recommendations: string[];
-  };
+  data: any;
   processing_time_ms: number;
   error?: string;
 }
@@ -30,69 +25,130 @@ interface AggregationResult {
   processing_time_ms: number;
 }
 
-export class PythonAPIClient {
+class PythonClient {
   private baseUrl: string;
 
   constructor() {
-    this.baseUrl = process.env.PYTHON_API_URL || 'http://localhost:8000';
+    this.baseUrl = process.env.PYTHON_API_URL || 'http://localhost:8001';
   }
 
   /**
-   * Vérifier la santé de l'API Python
+   * ✅ NOUVEAU: Extraction DIRECTE sans fichier temporaire
    */
-  async healthCheck(): Promise<boolean> {
+  async extractAndAnalyzeFile(file: File): Promise<PythonExtractionResult> {
     try {
-      const response = await fetch(`${this.baseUrl}/health`, {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+      // ✅ Convertir le fichier en buffer directement
+      const arrayBuffer = await file.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+      
+      // ✅ Créer FormData avec le buffer directement
+      const formData = new FormData();
+      
+      // Créer un nouveau File object à partir du buffer
+      const fileBlob = new Blob([buffer], { type: file.type });
+      const fileObject = new File([fileBlob], file.name, { type: file.type });
+      
+      formData.append('file', fileObject);
+      formData.append('filename', file.name);
+      formData.append('analysis_level', 'complete');
+
+      console.log(`🐍 Envoi vers Python API: ${file.name} (${file.size} bytes)`);
+
+      const response = await fetch(`${this.baseUrl}/extract`, {
+        method: 'POST',
+        body: formData, // FormData avec fichier direct
+        // Ne pas définir Content-Type, fetch le fait automatiquement
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const errorText = await response.text();
+        let errorDetail: string;
+        
+        try {
+          const errorData = JSON.parse(errorText);
+          errorDetail = errorData.detail || errorData.error || errorText;
+        } catch {
+          errorDetail = errorText || `HTTP ${response.status}`;
+        }
+        
+        throw new Error(`Erreur Python API: ${errorDetail}`);
       }
 
-      const data = await response.json();
-      return data.status === 'healthy';
+      const result = await response.json();
+      
+      console.log('✅ Réponse Python reçue avec succès');
+      return {
+        success: true,
+        data: result,
+        processing_time_ms: result.performance?.total_time || 0
+      };
+
     } catch (error) {
-      console.error('Erreur health check Python API:', error);
-      return false;
+      console.error('❌ Erreur extraction Python:', error);
+      return {
+        success: false,
+        data: {},
+        processing_time_ms: 0,
+        error: error instanceof Error ? error.message : 'Erreur inconnue'
+      };
     }
   }
 
   /**
-   * Extraction et analyse complète d'un fichier
+   * ✅ NOUVEAU: Traitement orchestré complet DIRECT
    */
-  async extractAndAnalyzeFile(file: File): Promise<PythonAnalysisResult> {
+  async processFileComplete(file: File): Promise<{
+    success: boolean;
+    data: any;
+    error?: string;
+  }> {
+    const startTime = Date.now();
+
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const response = await fetch(`${this.baseUrl}/extract`, {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `HTTP ${response.status}`);
+      // 1. Extraction et analyse Python DIRECTE
+      console.log('🐍 Démarrage extraction Python directe...');
+      const pythonResult = await this.extractAndAnalyzeFile(file);
+      
+      if (!pythonResult.success) {
+        throw new Error(pythonResult.error || 'Erreur extraction Python');
       }
 
-      const result = await response.json();
-      return result;
+      const totalTime = Date.now() - startTime;
+      console.log(`✅ Traitement Python terminé en ${totalTime}ms`);
+
+      // 2. Structure de réponse enrichie
+      return {
+        success: true,
+        data: {
+          extraction: pythonResult.data.extraction,
+          analysis: pythonResult.data.analysis,
+          insights: pythonResult.data.insights || {},
+          recommendations: pythonResult.data.recommendations || [],
+          performance: {
+            extraction_time: pythonResult.processing_time_ms,
+            analysis_time: totalTime - pythonResult.processing_time_ms,
+            total_time: totalTime
+          }
+        }
+      };
+
     } catch (error) {
-      console.error('Erreur extraction Python:', error);
+      const totalTime = Date.now() - startTime;
+      console.error('❌ Erreur traitement complet:', error);
+      
       return {
         success: false,
         data: {
           extraction: {},
           analysis: {},
-          quality: {},
-          business_patterns: {},
-          recommendations: []
+          insights: {},
+          recommendations: ['Erreur lors du traitement du fichier'],
+          performance: {
+            extraction_time: 0,
+            analysis_time: 0,
+            total_time: totalTime
+          }
         },
-        processing_time_ms: 0,
         error: error instanceof Error ? error.message : 'Erreur inconnue'
       };
     }
@@ -179,74 +235,6 @@ export class PythonAPIClient {
   }
 
   /**
-   * Traitement orchestré complet : extraction + analyse + insights
-   */
-  async processFileComplete(file: File): Promise<{
-    success: boolean;
-    extraction: any;
-    analysis: any;
-    insights: any;
-    recommendations: string[];
-    performance: {
-      extraction_time: number;
-      analysis_time: number;
-      total_time: number;
-    };
-    error?: string;
-  }> {
-    const startTime = Date.now();
-
-    try {
-      // 1. Extraction et analyse Python
-      console.log('🐍 Démarrage extraction Python...');
-      const pythonResult = await this.extractAndAnalyzeFile(file);
-      
-      if (!pythonResult.success) {
-        throw new Error(pythonResult.error || 'Erreur extraction Python');
-      }
-
-      const extractionTime = pythonResult.processing_time_ms;
-      
-      // 2. Générer des insights supplémentaires
-      const insights = this.generateInsights(pythonResult.data);
-      const totalTime = Date.now() - startTime;
-
-      console.log(`✅ Traitement Python terminé en ${totalTime}ms`);
-
-      return {
-        success: true,
-        extraction: pythonResult.data.extraction,
-        analysis: pythonResult.data.analysis,
-        insights,
-        recommendations: pythonResult.data.recommendations,
-        performance: {
-          extraction_time: extractionTime,
-          analysis_time: totalTime - extractionTime,
-          total_time: totalTime
-        }
-      };
-
-    } catch (error) {
-      const totalTime = Date.now() - startTime;
-      console.error('❌ Erreur traitement complet:', error);
-      
-      return {
-        success: false,
-        extraction: {},
-        analysis: {},
-        insights: {},
-        recommendations: ['Erreur lors du traitement du fichier'],
-        performance: {
-          extraction_time: 0,
-          analysis_time: 0,
-          total_time: totalTime
-        },
-        error: error instanceof Error ? error.message : 'Erreur inconnue'
-      };
-    }
-  }
-
-  /**
    * Orchestration intelligente des questions
    */
   async answerQuestion(
@@ -273,22 +261,22 @@ export class PythonAPIClient {
       const classification = await this.classifyQuery(question, availableColumns);
       const classificationTime = Date.now() - startTime;
 
-      // 2. Traitement selon le type détecté
-      let answer: any = {};
-      let sources: string[] = ['Python Analysis'];
+      // 2. Traiter selon le type de question
+      let answer: any;
+      let strategy: string;
 
       if (classification.type === 'numeric' || classification.type === 'hybrid') {
-        // Utiliser les agrégations Python
-        const aggregationResult = await this.computeAggregations(
-          question,
-          documentData.dataframe,
-          'smart'
-        );
-        
-        if (aggregationResult.success) {
-          answer = aggregationResult.aggregations;
-          sources.push('Smart Aggregations');
-        }
+        // Questions numériques -> Agrégations
+        const aggResult = await this.computeAggregations(question, documentData);
+        answer = aggResult.aggregations;
+        strategy = 'python_aggregations';
+      } else {
+        // Questions sémantiques -> Recherche
+        answer = { 
+          message: 'Question sémantique - utiliser la recherche vectorielle',
+          suggested_approach: 'semantic_search'
+        };
+        strategy = 'semantic_search';
       }
 
       const totalTime = Date.now() - startTime;
@@ -296,9 +284,9 @@ export class PythonAPIClient {
       return {
         success: true,
         answer,
-        strategy: classification.suggested_strategy,
+        strategy,
         confidence: classification.confidence,
-        sources,
+        sources: classification.relevant_columns,
         performance: {
           classification_time: classificationTime,
           processing_time: totalTime - classificationTime,
@@ -307,13 +295,13 @@ export class PythonAPIClient {
       };
 
     } catch (error) {
-      const totalTime = Date.now() - startTime;
-      console.error('❌ Erreur réponse question:', error);
+      console.error('❌ Erreur traitement question:', error);
       
+      const totalTime = Date.now() - startTime;
       return {
         success: false,
-        answer: {},
-        strategy: 'Error fallback',
+        answer: { error: 'Erreur lors du traitement de la question' },
+        strategy: 'error',
         confidence: 0,
         sources: [],
         performance: {
@@ -326,90 +314,80 @@ export class PythonAPIClient {
   }
 
   /**
-   * Classification simple en fallback
+   * Classification simple de fallback
    */
-  private simpleFallbackClassification(question: string): 'numeric' | 'semantic' | 'hybrid' {
-    const numericKeywords = ['total', 'somme', 'moyenne', 'top', 'combien', 'revenus'];
-    const questionLower = question.toLowerCase();
-    
-    if (numericKeywords.some(keyword => questionLower.includes(keyword))) {
-      return 'numeric';
-    }
-    
-    return 'semantic';
+  private simpleFallbackClassification(question: string): 'numeric' | 'semantic' {
+    const numericKeywords = [
+      'total', 'somme', 'moyenne', 'maximum', 'minimum', 'combien',
+      'prix', 'revenus', 'IRPD', 'agent', 'performance', '%',
+      'compare', 'évolution', 'tendance', 'top', 'classement'
+    ];
+
+    const lowerQuestion = question.toLowerCase();
+    const hasNumericKeywords = numericKeywords.some(keyword => 
+      lowerQuestion.includes(keyword.toLowerCase())
+    );
+
+    return hasNumericKeywords ? 'numeric' : 'semantic';
   }
 
   /**
-   * Génération d'insights supplémentaires
+   * Générer des insights automatiques
    */
   private generateInsights(data: any): any {
-    const insights = {
-      data_quality_summary: {},
-      business_highlights: [] as string[],
-      performance_metrics: {},
-      recommendations_summary: [] as string[]
+    const insights: any = {
+      summary: 'Données analysées avec succès',
+      key_metrics: [],
+      anomalies: [],
+      trends: []
     };
 
-    try {
-      // Résumer la qualité des données
-      if (data.quality) {
-        insights.data_quality_summary = {
-          overall_score: data.quality.overall_score || 0,
-          completeness: data.quality.completeness || 0,
-          status: data.quality.overall_score > 80 ? 'excellent' : 
-                  data.quality.overall_score > 60 ? 'good' : 'needs_attention'
-        };
+    // Ajouter des insights basiques basés sur les patterns détectés
+    if (data.analysis?.business_patterns) {
+      const patterns = data.analysis.business_patterns;
+      
+      if (patterns.sixt_agents?.total_agents) {
+        insights.key_metrics.push(`${patterns.sixt_agents.total_agents} agents SIXT détectés`);
       }
-
-      // Highlights business
-      if (data.business_patterns) {
-        if (data.business_patterns.exit_employees) {
-          insights.business_highlights.push(
-            `${data.business_patterns.exit_employees.count || 0} Exit Employees détectés`
-          );
-        }
-        
-        if (data.business_patterns.performance_segments) {
-          const segments = data.business_patterns.performance_segments;
-          insights.business_highlights.push(
-            `Segmentation: ${segments.high_performers?.count || 0} top performers`
-          );
-        }
+      
+      if (patterns.financial_data?.total_revenue) {
+        insights.key_metrics.push(`Revenue total: ${patterns.financial_data.total_revenue}`);
       }
-
-      // Métriques de performance
-      if (data.analysis && data.analysis.basic_stats) {
-        const stats = data.analysis.basic_stats;
-        const numericColumns = Object.keys(stats);
-        
-        insights.performance_metrics = {
-          numeric_columns_count: numericColumns.length,
-          has_correlations: data.analysis.correlations && 
-                          Object.keys(data.analysis.correlations).length > 0,
-          outliers_detected: data.analysis.outliers && 
-                           Object.values(data.analysis.outliers).some((col: any) => col.count > 0)
-        };
+      
+      if (patterns.exit_employees?.count) {
+        insights.anomalies.push(`${patterns.exit_employees.count} Exit Employees identifiés`);
       }
-
-      // Résumé des recommandations
-      if (data.recommendations && Array.isArray(data.recommendations)) {
-        insights.recommendations_summary = data.recommendations.slice(0, 3);
-      }
-
-    } catch (error) {
-      console.warn('Erreur génération insights:', error);
     }
 
     return insights;
   }
+
+  /**
+   * ✅ Vérifier la disponibilité de l'API Python
+   */
+  async healthCheck(): Promise<boolean> {
+    try {
+      const response = await fetch(`${this.baseUrl}/health`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      return response.ok;
+    } catch (error) {
+      console.error('Python API non disponible:', error);
+      return false;
+    }
+  }
 }
 
 // Export du client singleton
-export const pythonClient = new PythonAPIClient();
+export const pythonClient = new PythonClient();
 
-// Types pour TypeScript
+// Export des types pour utilisation ailleurs
 export type {
-  PythonAnalysisResult,
+  PythonExtractionResult,
   QueryClassificationResult,
   AggregationResult
 };
